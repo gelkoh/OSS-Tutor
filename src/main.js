@@ -9,6 +9,8 @@ import { exec } from "child_process"
 import { Ollama } from "ollama"
 import Parser from "tree-sitter"
 import JavaScript from "tree-sitter-javascript"
+import { chunkCode, analyzeFile } from "./services/AnalysisService.js"
+import { buildGraphData } from "./services/GraphBuilder.js"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -553,7 +555,7 @@ function createWindow() {
         }
     })
 
-    ipcMain.handle("process-repo-files", async (event, filePaths) => {
+    /*ipcMain.handle("process-repo-files", async (event, filePaths) => {
         const analysisResults = []
 
         const promises = filePaths.map(async (filePath) => {
@@ -577,6 +579,30 @@ function createWindow() {
         await Promise.allSettled(promises)
 
         return { success: true, analysisResults: analysisResults, processedCount: analysisResults.length }
+    })*/
+
+    ipcMain.handle("process-repo-files", async (event, projectRoot) => {
+        // 1. Alle JS Dateien rekursiv finden (hast du ja schon in buildTree)
+        // Wir nehmen an, du hast eine Liste von filePaths:
+        const filePaths = await getAllJsFiles(projectRoot) // Musst du aus deiner buildTree Logik extrahieren
+
+        // 2. Analyse parallel
+        const promises = filePaths.map(async (filePath) => {
+            const content = await fs.promises.readFile(filePath, "utf-8")
+            return analyzeFile(filePath, content)
+        })
+
+        const analysisResults = await Promise.all(promises)
+
+        // 3. Graph Daten bauen
+        const graphData = buildGraphData(analysisResults, projectRoot)
+
+        // 4. Alles zurückgeben
+        return {
+            success: true,
+            analysisResults, // Für das LLM später
+            graphData // Direkt für Vue Flow
+        }
     })
 }
 
@@ -591,3 +617,41 @@ app.whenReady().then(() => {
 app.on("window-all-closed", () => {
     if (process.platform !== "darwin") app.quit()
 })
+
+
+// PUT THIS IN SERVICE MAYBE
+/**
+ * Rekursive Funktion, die nur nach JS-Dateien sucht.
+ * Viel schneller als buildTree, da sie keine UI-Objekte erzeugt.
+ */
+const getAllJsFiles = (dirPath, arrayOfFiles = []) => {
+    let files
+    
+    try {
+        files = fs.readdirSync(dirPath, { withFileTypes: true })
+    } catch(err) {
+        console.error("Access denied or error reading:", dirPath)
+        return arrayOfFiles
+    }
+
+    for (const file of files) {
+        // Ignoriere Ordner, die wir nicht scannen wollen
+        if (file.name === "node_modules" || file.name === ".git" || file.name === "dist" || file.name === "build") {
+            continue
+        }
+
+        const fullPath = path.join(dirPath, file.name)
+
+        if (file.isDirectory()) {
+            // Rekursiver Abstieg in Unterordner
+            getAllJsFiles(fullPath, arrayOfFiles)
+        } else {
+            // Hier dein Filter: Ist es eine JS Datei?
+            if (file.name.endsWith(".js") || file.name.endsWith(".jsx") || file.name.endsWith(".vue")) {
+                arrayOfFiles.push(fullPath)
+            }
+        }
+    }
+
+    return arrayOfFiles
+}

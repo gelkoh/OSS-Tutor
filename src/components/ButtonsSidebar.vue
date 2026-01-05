@@ -1,7 +1,7 @@
 <template>
     <div
-        class="flex p-2 flex-col gap-2 absolute top-0 h-screen left-0
-               bg-neutral-800"
+        class="flex w-16 flex-col gap-2 absolute top-0 h-screen left-0
+               bg-neutral-800 items-center py-2"
     >
         <Tooltip placement="right" text="Home" :offset="17">
             <button

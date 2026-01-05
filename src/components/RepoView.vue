@@ -106,7 +106,7 @@
             Not implemented yet
         </Panel>
 
-        <Canvas />
+        <CanvasTest2 />
     </div>
 </template>
 
@@ -117,7 +117,8 @@
     import FileExplorer from "../components/FileExplorer.vue"
     import Chatbot from "../components/Chatbot.vue"
     import Issues from "../components/Issues.vue"
-    import Canvas from "../components/Canvas.vue"
+    //import Canvas from "../components/Canvas.vue"
+    import CanvasTest2 from "../components/canvas/CanvasTest2.vue"
     import { useRepoStateStore } from "../stores/repoState.js"
     import { Folder, BotMessageSquare, CircleDot, Trash, RefreshCw,
              CircleQuestionMark, Settings} from "lucide-vue-next"

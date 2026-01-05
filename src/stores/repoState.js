@@ -4,6 +4,9 @@ import { ref, computed, toRaw } from 'vue'
 const ANALYZE_PROJECT = false
 
 export const useRepoStateStore = defineStore('repoState', () => {
+    const graphNodes = ref([])
+    const graphEdges = ref([])
+
     ////////////////////
     // Refs
     ////////////////////
@@ -63,6 +66,99 @@ export const useRepoStateStore = defineStore('repoState', () => {
     // Reading/loading/saving repo
     ////////////////////
     const readRepoContents = async (path) => {
+        isLoading.value = true
+
+        try {
+            const { analysisResults, graphData } = await window.api.processRepoFiles(path)
+
+            console.log('Rohe Daten vom Backend:', graphData.nodes.length, 'Nodes')
+
+            // Organisiere Nodes: Parents zuerst, dann Kinder
+            const organizedNodes = organizeNodesForVueFlow(graphData.nodes)
+
+            console.log('Organisierte Nodes:', organizedNodes.length)
+            console.log('Parents:', organizedNodes.filter(n => !n.parentNode).length)
+            console.log('Children:', organizedNodes.filter(n => n.parentNode).length)
+
+            graphNodes.value = organizedNodes
+            graphEdges.value = graphData.edges
+
+            await window.api.saveRepoState(path, { 
+                graphData: {
+                    nodes: organizedNodes,
+                    edges: graphData.edges
+                }
+            })
+
+        } catch (e) {
+            console.error(e)
+        } finally {
+            isLoading.value = false
+            isRepoOpen.value = true
+        }
+    }
+
+    const organizeNodesForVueFlow = (nodes) => {
+        const parentNodes = nodes.filter(n => !n.parentNode)
+        const childNodes = nodes.filter(n => n.parentNode)
+
+        console.log('Organisiere:', parentNodes.length, 'Parents,', childNodes.length, 'Children')
+
+        const organizedParents = parentNodes.map((parent, index) => ({
+            ...parent,
+            type: parent.type || 'directory',
+            position: { x: index * 600, y: 0 },
+            style: {
+                padding: '0',
+            },
+            extent: undefined,
+            data: {
+                ...parent.data,
+                label: parent.label || parent.data?.label || 'Unknown Directory'
+            }
+        }))
+
+        const organizedChildren = childNodes.map((child, index) => ({
+            ...child,
+            type: child.type || 'file',
+            position: { x: 20, y: 60 + (index * 50) },
+            parentNode: child.parentNode,
+            extent: 'parent',
+            expandParent: true,
+            data: {
+                ...child.data,
+                label: child.label || child.data?.label || 'Unknown File'
+            }
+        }))
+
+        console.log('Organisierte Parents:', organizedParents.map(p => ({
+            id: p.id,
+            position: p.position,
+            type: p.type
+        })))
+
+        return [...organizedParents, ...organizedChildren]
+    }
+
+    /*const runLLMAnalysisInBackground = async (analysisResults) => {
+        // Hier kommt deine Loop rein, die du vorher hattest.
+        // ABER: Speichere die Ergebnisse nicht nur in einer Variable, 
+        // sondern update direkt den spezifischen Node im Graph!
+        
+        for (const entry of analysisResults) {
+            // ... (Dein LLM Aufruf Code) ...
+            const summary = await window.api.analyzeChunk(...)
+
+            // Update den Node im Store, damit das Icon z.B. grün wird ("Analyzed")
+            const nodeId = getIdFromPath(entry.filePath)
+            updateNodeData(nodeId, { summary: summary })
+            
+            // Nach jeder Datei kurz speichern, damit Fortschritt nicht verloren geht
+            await saveProgress() 
+        }
+    }*/
+
+    /*const readRepoContents = async (path) => {
         // TODO: Refactor this function
         await window.api.saveRepository(path)
 
@@ -88,6 +184,7 @@ export const useRepoStateStore = defineStore('repoState', () => {
             await setFileTree(tree)
 
             if (ANALYZE_PROJECT) {
+                console.log("TRYING TO ANALYZE PROJECT")
                 const analysis = await window.api.processRepoFiles(tree.allFilePaths)
 
                 const modelName = "codellama"
@@ -175,7 +272,7 @@ export const useRepoStateStore = defineStore('repoState', () => {
         } finally {
             isLoading.value = false
         }
-    }
+    }*/
 
     const loadRepoState = async (path) => {
         if (!window.api) {
@@ -321,7 +418,11 @@ export const useRepoStateStore = defineStore('repoState', () => {
         clearHistory,
 
         readRepoContents,
+        organizeNodesForVueFlow,
         loadRepoState,
         saveRepoState,
+
+        graphNodes,
+        graphEdges,
     }
 })
