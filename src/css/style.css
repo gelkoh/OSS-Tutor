@@ -67,3 +67,52 @@ body {
 code.hljs {
     background: transparent !important;
 }
+
+
+
+
+.vue-flow__controls {
+    top: 0 !important;
+    right: 0 !important;
+    left: unset !important;
+    bottom: unset !important;
+    border-radius: var(--radius-sm) !important;
+    box-shadow: none !important;
+    padding: calc(var(--spacing) * 1) !important;
+    background: var(--color-neutral-800);
+    display: flex !important;
+    gap: 0 calc(var(--spacing) * 2) !important;
+}
+
+.vue-flow__controls-button {
+    border: none !important;
+    background: var(--color-neutral-800) !important;
+    width: calc(var(--spacing) * 6) !important;
+    height: calc(var(--spacing) * 6) !important;
+    border-radius: var(--radius-sm) !important;
+}
+
+.vue-flow__controls-button:hover {
+    background: var(--color-neutral-700) !important;
+}
+
+.vue-flow__controls-button svg {
+    fill: white !important;
+}
+
+.vue-flow__minimap svg {
+    background: var(--color-neutral-700);
+}
+
+
+
+
+/* HIGHLIGHTJS */
+code.hljs {
+    /*padding: 12px !important;*/
+    /*font-size: 14px;*/
+    /*line-height: 20px !important;*/
+    padding-left: calc(var(--spacing) * 12) !important;
+}
+
+

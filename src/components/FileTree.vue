@@ -39,7 +39,7 @@
                 <FileTree
                     :searchQuery="searchQuery"
                     :file="childFile"
-                    @file-selected="$emit('file-selected', $event)" 
+                    @file-selected="$emit('file-selected', $event)"
                 />
             </li>
         </ul>
@@ -52,8 +52,9 @@
             class="absolute pointer-events-none top-[16px] w-6 h-px bg-neutral-600"
         ></div>
 
+            <!--@click="$emit('file-selected', file.path)"-->
         <div
-            @click="$emit('file-selected', file.path)"
+            @click="handleFileClick"
             :style="{ paddingLeft: `${24 * (file.depth) + 20}px` }"
             class="group flex px-2 py-1 rounded-sm justify-between items-center hover:bg-neutral-700 cursor-pointer pr-1"
         >
@@ -178,4 +179,10 @@
             isOpen.value = originalIsOpen.value
         }
     })
+
+    const handleFileClick = () => {
+        if (props.file.relativePath) {
+            repoStore.focusNode(props.file.relativePath)
+        }
+    }
 </script>

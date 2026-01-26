@@ -1,12 +1,14 @@
 <template>
     <div class="pt-50 flex justify-center items-center flex-col h-screen">
-        <h1 class="text-2xl text-white">Open source assistance system</h1>
+        <h1 class="text-6xl text-center font-bold text-white">{{ $appName }}</h1>
 
-        <div class="text-6xl text-center font-bold text-white">
+        <div class="text-2xl text-white mt-2">An Open-source Assistance System</div>
+
+        <!--<div class="text-6xl text-center font-bold text-white">
             <h2 class="mt-2">
                 Open a code repository<br /> to get started
             </h2>
-        </div>
+        </div>-->
 
         <div class="flex gap-x-12 mt-20 max-w-[1000px] w-full">
             <RecentlyUsedRepositories class="grow" />

@@ -21,12 +21,32 @@
                             <template v-for="(subPart, subIndex) in part.content" :key="subIndex">
                                 <span v-if="subPart.type === 'text'">{{ subPart.content }}</span>
 
-                                <code
-                                    v-else-if="subPart.type === 'inline-code'"
-                                    class="px-1.5 py-0.5 bg-neutral-950 rounded text-sm font-mono"
-                                >
-                                    {{ subPart.content }}
-                                </code>
+                                <template v-else-if="subPart.type === 'inline-code'">
+                                    <button
+                                        v-if="isKnownFile(subPart.content)"
+                                        @click="repoStore.focusNode(subPart.content)"
+                                        class="relative mx-1 top-[2px] text-blue-300
+                                               hover:text-white transition-colors cursor-pointer
+                                               text-sm font-mono inline-flex items-center gap-1
+                                               before:absolute before:top-[-4px] before:left-[-4px] before:right-[-4px] before:bottom-[-4px] before:bg-blue-500/20
+                                               before:rounded-sm before:border before:border-blue-500/30 hover:before:bg-blue-500/40"
+                                        title="Click to show in canvas"
+                                    >
+                                        <span class="opacity-70">
+                                            <File :size="14" />
+                                        </span>
+
+                                        <span class="leading-none">{{ subPart.content }}</span>
+                                    </button>
+
+                                    <code
+                                        v-else
+                                        class="px-1.5 py-0.5 bg-neutral-950 rounded text-sm font-mono text-neutral-300"
+                                    >
+                                        {{ subPart.content }}
+                                    </code>
+
+                                </template>
                             </template>
                         </div>
 
@@ -101,7 +121,7 @@
 
                 <div class="mt-1 flex justify-between">
                     <button class="cursor-pointer px-3 h-9 rounded-sm flex items-center justify-center hover:bg-neutral-500 gap-x-2">
-                        <BrainCircuit :size="18" /> Codellama
+                        <BrainCircuit :size="18" /> Llama3.1
                     </button>
 
                     <div>
@@ -129,7 +149,7 @@
 
 <script setup>
     import { ref, onMounted, computed } from "vue"
-    import { Info, CircleDot, SendHorizontal, BrainCircuit, Square } from "lucide-vue-next"
+    import { Info, CircleDot, SendHorizontal, BrainCircuit, Square, File } from "lucide-vue-next"
     import { useMarkdownParser } from "../composables/useMarkdownParser.js"
     import { useRepoStateStore } from "../stores/repoState.js"
 
@@ -167,7 +187,179 @@
         })
     })
 
+    const isKnownFile = (text) => {
+        if (!text) return false
+        
+        // Bereinigen (manchmal machen LLMs Leerzeichen rein)
+        const cleanPath = text.trim()
+        
+        // Wir suchen im Store nach einer Node mit dieser ID
+        // (Da deine IDs relative Pfade sind, z.B. "math/add.js", sollte das matchen)
+        return repoStore.graphNodes.some(n => n.id === cleanPath && n.type === 'file')
+    }
+const buildProjectContext = () => {
+    const nodes = repoStore.graphNodes.filter(n => n.type === "file")
+
+    let contextString = "Here is the source code of the project files:\n\n"
+
+    nodes.forEach(node => {
+        // HIER IST DIE ÄNDERUNG: Wir holen den echten Code, nicht die Summary
+        let content = ""
+        if (node.data.chunks && node.data.chunks.length > 0) {
+            content = node.data.chunks.join("\n")
+        } else {
+            content = "// No code content available"
+        }
+        
+        // Wir begrenzen die Länge pro Datei sicherheitshalber etwas (optional)
+        // content = content.slice(0, 2000) 
+
+        contextString += `FilePath: \`${node.id}\`\nCode Content:\n\`\`\`javascript\n${content}\n\`\`\`\n\n`
+    })
+
+    contextString += "\nIMPORTANT: When you mention a file, simply wrap the full relative path in backticks."
+
+    return contextString
+}
+    /*const buildProjectContext = () => {
+        // Retrieve all file nodes from the store
+        const nodes = repoStore.graphNodes.filter(n => n.type === "file")
+
+        let contextString = "Here is an overview of the project architecture based on the analyzed files:\n\nj"
+
+        nodes.forEach(node => {
+            const summary = node.data.summary || "No summary available"
+
+            contextString += `File: \`${node.id}\`\nSummary: ${summary}\n\n`
+        })
+
+        contextString += "\nIMPORTANT: When you mention a file, simply wrap the full relative path in backticks (e.g. `src/utils/math.js`)."
+
+        return contextString
+    }*/
+
     const sendMessage = async (event) => {
+        if (event.shiftKey) {
+            event.preventDefault()
+            return
+        }
+
+        if (!currentMessage.value.trim()) return
+
+        const userPrompt = currentMessage.value.trim()
+
+        // UI Update (User Message anzeigen)
+        repoStore.currentChatbotHistory.push({ sender: "user", text: userPrompt })
+        currentMessage.value = ""
+        isProcessing.value = true
+
+        // ---------------------------------------------------------
+        // CONTEXT BUILDING (NEU)
+        // ---------------------------------------------------------
+
+        // 1. Issue Context (Existierend)
+        const currentTargetIssue = repoStore.currentTargetIssue
+        let issueContext = ""
+        if (currentTargetIssue && currentTargetIssue.body) {
+            issueContext = `\n\nCURRENT GITHUB ISSUE CONTEXT:\nTitle: ${currentTargetIssue.title}\nBody: ${currentTargetIssue.body}`
+        }
+
+        // 2. Project Architecture Context (NEU)
+        // Wir holen die Summaries aller Files
+        const projectContext = buildProjectContext()
+
+        // 3. System Prompt zusammenbauen
+const systemPrompt = `
+        ROLE DEFINITION:
+        - YOU (The AI) are the "Senior Software Architect" and Mentor.
+        - THE USER (The Human) is a "Junior Developer".
+        - NEVER confuse these roles. Do not address the user as the architect.
+
+        GOAL:
+        Help the Junior Developer (User) find and fix bugs in the provided codebase context.
+
+        INSTRUCTIONS:
+        1. ANALYZE the provided "Code Content" sections thoroughly.
+        2. Be confident. Do not say "I am not sure" if the code is visible in the context. You see the code, so you know how functions are used.
+        3. DIDACTIC STRATEGY: Do not fix the code for the user immediately. Instead, guide them.
+           - If you see a logical error (e.g., using 'subtract' instead of 'add'), ask: "Look closely at line X in file Y. Is this the correct mathematical operation for a gross price?"
+           - If imports are wrong, ask: "Check where we import 'subtract' from. Do we actually need it?"
+        4. When referring to files, ALWAYS wrap the path in backticks (e.g., \`src/main.js\`) so they become clickable.
+
+        CONTEXT (Source Code):
+        ${projectContext}
+
+        CURRENT ISSUE:
+        ${issueContext}
+    `.trim()
+
+        // ---------------------------------------------------------
+        // MESSAGE HISTORY BAUEN
+        // ---------------------------------------------------------
+
+        const rawChatbotHistory = JSON.parse(JSON.stringify(repoStore.currentChatbotHistory))
+
+        // Wir bauen die History für die API
+        // WICHTIG: Die System-Message kommt GANZ AM ANFANG
+        const apiMessages = [
+            { role: "system", content: systemPrompt }
+        ]
+
+        // Dann die Chat-Historie anhängen (User/Assistant Ping-Pong)
+        // Wir filtern die letzte User-Nachricht raus, weil wir die oben schon gepusht haben? 
+        // Nein, rawChatbotHistory enthält schon den neuen User-Prompt.
+
+        rawChatbotHistory.forEach(msg => {
+            apiMessages.push({
+                role: msg.sender === "user" ? "user" : "assistant",
+                content: msg.text
+            })
+        })
+
+        // ---------------------------------------------------------
+        // SENDEN
+        // ---------------------------------------------------------
+
+        const currentChatbotHistory = repoStore.currentChatbotHistory
+        const newBotMessageIndex = currentChatbotHistory.length;
+        currentChatbotHistory.push({ sender: "assistant", text: "", status: "processing" });
+
+        try {
+            await window.api.sendChatbotMessage(
+                modelName,
+                apiMessages // Hier senden wir jetzt den fetten Kontext mit!
+            )
+
+            currentChatbotHistory[newBotMessageIndex].status = "success";
+        } catch(err) {
+            if (err.message && err.message.includes("Chatbot generation aborted by user")) {
+                console.log("Aborted successfully caught in sendMessage.")
+
+                if (currentChatbotHistory[newBotMessageIndex].status === "processing") {
+                    currentChatbotHistory[newBotMessageIndex].status = "aborted";
+                }
+
+                return
+            }
+
+            if (currentChatbotHistory[newBotMessageIndex].status === "processing") {
+                currentChatbotHistory[newBotMessageIndex].text += `\n\n[ERROR] ${err.message}`;
+                currentChatbotHistory[newBotMessageIndex].status = "error";
+            } else {
+                repoStore.currentChatbotHistory.push({ sender: "assistant", text: `[ERROR] ${err.message}`, status: "error" });
+            }
+
+        } finally {
+            isProcessing.value = false
+
+            textInputCopy.value.style.height = "24px"
+            textInput.value.style.height = "24px"
+
+            repoStore.saveHistory(currentChatbotHistory)
+        }
+    }
+
+    /*const sendMessage = async (event) => {
         if (event.shiftKey) {
             event.preventDefault()
             return
@@ -179,7 +371,6 @@
 
         repoStore.currentChatbotHistory.push({ sender: "user", text: userPrompt })
         currentMessage.value = ""
-
         isProcessing.value = true
 
         const rawChatbotHistory = JSON.parse(JSON.stringify(repoStore.currentChatbotHistory))
@@ -223,7 +414,7 @@
         } catch(err) {
             if (err.message && err.message.includes("Chatbot generation aborted by user")) {
                 console.log("Aborted successfully caught in sendMessage.")
-                
+
                 if (currentChatbotHistory[newBotMessageIndex].status === "processing") {
                     currentChatbotHistory[newBotMessageIndex].status = "aborted";
                 }
@@ -245,7 +436,7 @@
 
             repoStore.saveHistory(currentChatbotHistory)
         }
-    }
+    }*/
 
     const handleTextInputHeight = () => {
         const MAX_INPUT_HEIGHT = 168
@@ -278,4 +469,5 @@
         window.api.abortChatbotResponse()
         isProcessing.value = false
     }
+
 </script>

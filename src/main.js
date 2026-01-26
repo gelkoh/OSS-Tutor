@@ -123,7 +123,9 @@ const performChunking = (tree, codeContent) => {
     return chunks
 }
 
-function buildTree(dirPath, currentDepth, allFilePathsCollector) {
+function buildTree(dirPath, currentDepth, allFilePathsCollector, projectRoot = null) {
+    const root = projectRoot || dirPath
+
     const stats = fs.statSync(dirPath)
     if (!stats.isDirectory()) return []
 
@@ -141,50 +143,57 @@ function buildTree(dirPath, currentDepth, allFilePathsCollector) {
     const filtered = dirEntries.filter(entry => {
         if (entry.name === "node_modules") return false
 
+        // ZUERST prüfen, ob es ein .git-Verzeichnis ist
         if (entry.isDirectory() && entry.name === ".git") {
             const gitDirPath = path.join(dirPath, entry.name)
-
-            try {
-                const gitFiles = fs.readdirSync(gitDirPath, { withFileTypes: true })
-
-                for (const gitFile of gitFiles) {
-                    if (gitFile.name === "config" && gitFile.isFile()) {
-                        const configPath = path.join(gitDirPath, gitFile.name)
-
+            
+            // Nur das .git-Verzeichnis im Wurzelverzeichnis auswerten
+            if (dirPath === root) {
+                try {
+                    const configPath = path.join(gitDirPath, "config")
+                    
+                    if (fs.existsSync(configPath)) {
                         const fileContents = fs.readFileSync(configPath, "utf-8")
-
-                        const gitConfigLines = fileContents.split("\n")
-
-                        let ownerName
-                        let repoName
-
-                        for (const line of gitConfigLines) {
+                        const lines = fileContents.split("\n")
+                        
+                        for (const line of lines) {
+                            // Beide URL-Formate unterstützen
                             if (line.includes("github.com")) {
-                                if (line.includes("https://github.com/")) {
-                                    ownerName = line.split("/").at(-2)
-                                } else if (line.includes("git@github.com:")) {
-                                    ownerName = line.split(":").at(1).split("/")[0]
+                                let url = line.trim()
+                                
+                                // URL aus der config extrahieren
+                                if (url.includes("url = ")) {
+                                    url = url.split("url = ")[1].trim()
                                 }
-
-                                repoName = line.split("/").at(-1)
-
-                                if (ownerName && repoName) {
-                                    currentRepoInfo.ownerName = ownerName
-                                    currentRepoInfo.repoName = repoName.replace(/\.git$/,"")
+                                
+                                // SSH-Format: git@github.com:gelkoh/mini-test-project.git
+                                if (url.startsWith("git@github.com:")) {
+                                    const parts = url.split(":")[1].split("/")
+                                    if (parts.length >= 2) {
+                                        currentRepoInfo.ownerName = parts[0]
+                                        currentRepoInfo.repoName = parts[1].replace(/\.git$/, "")
+                                    }
                                 }
-
+                                // HTTPS-Format: https://github.com/gelkoh/mini-test-project.git
+                                else if (url.includes("https://github.com/")) {
+                                    const parts = url.split("https://github.com/")[1].split("/")
+                                    if (parts.length >= 2) {
+                                        currentRepoInfo.ownerName = parts[0]
+                                        currentRepoInfo.repoName = parts[1].replace(/\.git$/, "")
+                                    }
+                                }
+                                
+                                console.log("Found GitHub repo:", currentRepoInfo.ownerName, currentRepoInfo.repoName)
                                 break
                             }
                         }
-
-                        break
                     }
+                } catch(err) {
+                    console.error("Error reading .git/config:", err)
                 }
-            } catch(err) {
-                console.error("Error reading the .git repository:", err)
             }
-
-            return false
+            
+            return false // .git-Verzeichnis immer ausschließen
         }
 
         return true
@@ -194,16 +203,19 @@ function buildTree(dirPath, currentDepth, allFilePathsCollector) {
         const fullPath = path.join(dirPath, entry.name)
         const isDir = entry.isDirectory()
 
+        const relativePath = path.relative(root, fullPath).replace(/\\/g, "/")
+
         const node = {
             name: entry.name,
-            path: fullPath,
+            fullPath: fullPath,
+            relativePath: relativePath,
             type: isDir ? "directory" : "file",
             depth: entryDepth,
             children: []
         }
 
         if (isDir) {
-            node.children = buildTree(fullPath, entryDepth, allFilePathsCollector) || []
+            node.children = buildTree(fullPath, entryDepth, allFilePathsCollector, root) || []
         } else {
             if (shouldAnalyzeFile(entry.name)) {
                 allFilePathsCollector.push(fullPath)
@@ -292,6 +304,8 @@ function createWindow() {
 
         try {
             const treeRoot = buildRepoTreeWrapper(repoPath)
+            console.log("OWNER NAME: ", currentRepoInfo.ownerName)
+            console.log("REPO NAME: ", currentRepoInfo.repoName)
 
             return {
                 fileTree: treeRoot,
@@ -353,6 +367,8 @@ function createWindow() {
 
     ipcMain.handle("fetch-issues", async (event, { owner, name }) => {
         try {
+            console.log(`GET /repos/${owner}/${name}/issues`)
+
             const response = await octokit.request("GET /repos/{owner}/{name}/issues", {
                 owner: owner,
                 name: name,

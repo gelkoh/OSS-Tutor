@@ -4,19 +4,18 @@ import { ref, computed, toRaw } from 'vue'
 const ANALYZE_PROJECT = false
 
 export const useRepoStateStore = defineStore('repoState', () => {
+    // ---------------------------------------------------------
+    // STATE
+    // ---------------------------------------------------------
     const graphNodes = ref([])
     const graphEdges = ref([])
 
-    ////////////////////
-    // Refs
-    ////////////////////
-
-    // Persistent
+    // Persistent data
     const repoPath = ref("")
     const repoInfo = ref()
-
-    // Non-persistent
     const fileTree = ref(null)
+
+    // UI state
     const isRepoOpen = ref(false)
     const isLoading = ref(false)
 
@@ -42,7 +41,7 @@ export const useRepoStateStore = defineStore('repoState', () => {
     ////////////////////
     // Computed properties
     ////////////////////
-    const currentFileTree = computed(() => fileTree.value )
+    const currentFileTree = computed(() => fileTree.value)
     const currentSearchQuery = computed(() => searchQuery.value)
     const currentChatbotHistory = computed(() => chatbotHistory.value)
 
@@ -67,35 +66,121 @@ export const useRepoStateStore = defineStore('repoState', () => {
     ////////////////////
     const readRepoContents = async (path) => {
         isLoading.value = true
+        repoPath.value = path
 
         try {
-            const { analysisResults, graphData } = await window.api.processRepoFiles(path)
+            let cachedState = await window.api.loadRepoState(path)
 
-            console.log('Rohe Daten vom Backend:', graphData.nodes.length, 'Nodes')
+            // TODO: REMOVE
+            cachedState = null
 
-            // Organisiere Nodes: Parents zuerst, dann Kinder
-            const organizedNodes = organizeNodesForVueFlow(graphData.nodes)
 
-            console.log('Organisierte Nodes:', organizedNodes.length)
-            console.log('Parents:', organizedNodes.filter(n => !n.parentNode).length)
-            console.log('Children:', organizedNodes.filter(n => n.parentNode).length)
+            if (cachedState && cachedState.graphData) {
+                console.log("Loading from Cache...")
 
-            graphNodes.value = organizedNodes
-            graphEdges.value = graphData.edges
+                // Step 1: Restore graph
+                graphNodes.value = cachedState.graphData.nodes
+                graphEdges.value = cachedState.graphData.edges
 
-            await window.api.saveRepoState(path, { 
-                graphData: {
-                    nodes: organizedNodes,
-                    edges: graphData.edges
-                }
-            })
+                // Step 2: Restore file explorer
+                fileTree.value = cachedState.fileTree
+                repoInfo.value = cachedState.repoInfo || {}
 
+                // Step 3: Restore secondary data
+                fileExplorerState.value = cachedState.fileExplorerState || {}
+                chatbotHistory.value = cachedState.chatbotHistory || []
+
+                const cachedIssues = await window.api.loadIssuesCache(path)
+                issues.value = cachedIssues || []
+
+                /////// ONLY FOR TESTING
+                //await performFullAnalysis(path)
+            } else {
+                console.log("No cache found. Starting full analysis...")
+                // await performFullAnalysis(path)
+                await performFullAnalysis(path)
+            }
         } catch (e) {
-            console.error(e)
+            console.error("Critical Error during repo loading:", e)
         } finally {
             isLoading.value = false
             isRepoOpen.value = true
         }
+    }
+
+    // ---------------------------------------------------------
+    // ANALYSIS LOGIC
+    // ---------------------------------------------------------
+    const performFullAnalysis = async (path) => {
+        // Step 1: Retrieve file tree for file explorer
+        const { fileTree: tree, repoInfo: info } = await window.api.readDirectoryContents(path)
+
+        fileTree.value = tree
+        repoInfo.value = info
+
+        // SCHRITT A: Strukturelle Analyse (Backend)
+        //loadingMessage.value = "Parsing file structure & AST..."
+        const { graphData } = await window.api.processRepoFiles(path)
+
+        // SCHRITT B: LLM Analyse (Iterativ)
+        // Wir iterieren direkt über die graphData.nodes, da diese schon die Chunks enthalten
+        const nodesToAnalyze = graphData.nodes.filter(n => n.type === 'file' && n.data.chunks && n.data.chunks.length > 0)
+        
+        let processedCount = 0
+        const totalCount = nodesToAnalyze.length
+
+        console.log(`Starting LLM Analysis for ${totalCount} files...`)
+
+        for (const node of nodesToAnalyze) {
+            processedCount++
+
+            try {
+                const codeContext = node.data.chunks.join("\n\n").substring(0, 10000) // Safety Trim
+
+                const messages = [
+                    {
+                        role: "system", 
+                        content: "You are a senior software architect. Summarize the technical purpose of this code file in 2-3 concise sentences. Do not mention imports unless crucial. Focus on what functionality it exports." 
+                    },
+                    {
+                        role: "user",
+                        content: `Filename: ${node.label}\n\nCode:\n${codeContext}`
+                    }
+                ]
+
+                // API Aufruf an Ollama (codellama, llama3, etc.)
+                const modelName = "llama3.1" // oder was du lokal hast
+                const summary = await window.api.analyzeChunk(modelName, messages)
+                
+                // ERGEBNIS SPEICHERN
+                // Wir schreiben das direkt in das Node-Objekt
+                node.data.summary = summary.content || summary // Je nachdem wie deine API antwortet
+
+            } catch (err) {
+                console.error(`Failed to analyze ${node.label}`, err)
+                node.data.summary = "Analysis failed."
+            }
+        }
+
+        // SCHRITT C: Organisation & Layout
+        //loadingMessage.value = "Calculating Graph Layout..."
+        const organizedNodes = organizeNodesForVueFlow(graphData.nodes)
+        
+        // (Optional) Layout hier schon berechnen oder dem Canvas überlassen
+        // const layoutedNodes = layoutGraph(organizedNodes, graphData.edges)
+        
+        // State setzen
+        graphNodes.value = organizedNodes
+        graphEdges.value = graphData.edges
+
+        // SCHRITT D: Speichern (Persistenz)
+        //loadingMessage.value = "Saving analysis results..."
+        await window.api.saveRepoState(path, { 
+            graphData: {
+                nodes: organizedNodes,
+                edges: graphData.edges
+            }
+        })
     }
 
     const organizeNodesForVueFlow = (nodes) => {
@@ -140,140 +225,6 @@ export const useRepoStateStore = defineStore('repoState', () => {
         return [...organizedParents, ...organizedChildren]
     }
 
-    /*const runLLMAnalysisInBackground = async (analysisResults) => {
-        // Hier kommt deine Loop rein, die du vorher hattest.
-        // ABER: Speichere die Ergebnisse nicht nur in einer Variable, 
-        // sondern update direkt den spezifischen Node im Graph!
-        
-        for (const entry of analysisResults) {
-            // ... (Dein LLM Aufruf Code) ...
-            const summary = await window.api.analyzeChunk(...)
-
-            // Update den Node im Store, damit das Icon z.B. grün wird ("Analyzed")
-            const nodeId = getIdFromPath(entry.filePath)
-            updateNodeData(nodeId, { summary: summary })
-            
-            // Nach jeder Datei kurz speichern, damit Fortschritt nicht verloren geht
-            await saveProgress() 
-        }
-    }*/
-
-    /*const readRepoContents = async (path) => {
-        // TODO: Refactor this function
-        await window.api.saveRepository(path)
-
-        isLoading.value = true
-
-        //error.value = null
-        fileTree.value = {}
-
-        repoInfo.value = {}
-
-        try {
-            isRepoOpen.value = true
-
-            // probably read repo info separately
-            const { fileTree: tree, repoInfo: loadedRepoInfo } = await window.api.readDirectoryContents(path)
-
-            fileTree.value = tree
-
-            // Here all repo state gets loaded -- important
-            await loadRepoState(path)
-
-            // Set file tree in store (not persistently)
-            await setFileTree(tree)
-
-            if (ANALYZE_PROJECT) {
-                console.log("TRYING TO ANALYZE PROJECT")
-                const analysis = await window.api.processRepoFiles(tree.allFilePaths)
-
-                const modelName = "codellama"
-
-                totalFilesToBeAnalysedCount.value = analysis.analysisResults.length
-
-                // Count chunks
-                for (const entry of analysis.analysisResults) {
-                    totalChunkCount.value += entry.chunks.length
-                }
-
-                const analysisProgressStep = 1.0 / totalChunkCount.value
-
-                let messagesCollector = []
-
-                for (const entry of analysis.analysisResults) {
-                    currentFileName.value = entry.filePath.split("/").at(-1)
-
-                    for (const chunk of entry.chunks) {
-                        const chunkPrompt = `
-                            Analyze this code chunk from the repository. Explain what it does.
-
-                            \`\`\`${entry.language}
-                            ${chunk}
-                            \`\`\`
-
-                            Provide a concise, single-paragraph summary.
-                        `.trim()
-
-                        const chunkMessages = [{
-                            role: "user",
-                            content: chunkPrompt
-                        }]
-
-                        const chunkSummary = await window.api.analyzeChunk(
-                            modelName,
-                            chunkMessages
-                        )
-
-                        messagesCollector.push(chunkSummary)
-
-                        currentChunkIndex.value += 1
-                        progress.value += analysisProgressStep
-                    }
-
-                    const filePrompt = `
-                        Summarize the primary function of this file based on its summarized code chunks.
-
-                        ${messagesCollector.join("\n")}
-                    `.trim()
-
-                    const fileMessages = [{
-                        role: "user",
-                        content: filePrompt
-                    }]
-
-                    const chunkSummary = await window.api.analyzeChunk(
-                        modelName,
-                        fileMessages
-                    )
-
-                    messagesCollector = []
-                    currentFileIndex.value += 1
-                }
-            }
-
-            if (loadedRepoInfo && loadedRepoInfo.ownerName && loadedRepoInfo.repoName) {
-                repoInfo.owner = loadedRepoInfo.ownerName
-                repoInfo.name = loadedRepoInfo.repoName
-
-                const cachedIssues = await window.api.loadIssuesCache(path)
-                console.log("Cached issues:", cachedIssues)
-                issues.value = cachedIssues
-                console.log(`Loaded ${cachedIssues.length} issues from cache`)
-
-                if (cachedIssues.length === 0) {
-                    console.log("Cached issues length:", cachedIssues.length)
-                    await fetchIssues(repoInfo.ownerName, repoInfo.repoName)
-                }
-            } else {
-                issues.value = []
-            }
-        } catch(error) {
-            console.error("An error occured:", error.message)
-        } finally {
-            isLoading.value = false
-        }
-    }*/
-
     const loadRepoState = async (path) => {
         if (!window.api) {
             console.error("API is not available.")
@@ -313,28 +264,6 @@ export const useRepoStateStore = defineStore('repoState', () => {
         fileTree.value = treeData
     }
 
-    ////////////////////
-    // Issues
-    ////////////////////
-    //const fetchAndCacheIssues = async (owner, repo, repoPath) => {
-    //    console.log("Fetching fresh issues from GitHub...")
-
-    //    try {
-    //        const freshIssues = await window.api.fetchIssues(owner, repo)
-    //        issues.value = freshIssues
-
-    //        issues.value.forEach(issue => {
-    //            issue["is_targeted"] = false
-    //        })
-
-    //        await window.api.saveIssuesCache(repoPath, freshIssues)
-
-    //        console.log(`Successfully fetched and cached ${freshIssues.length} fresh open issues`)
-    //    } catch(err) {
-    //        console.error("Error fetching fresh issues:", err.message)
-    //    }
-    //}
-
     const targetIssue = async (issueId) => {
         if (issueId === targetedIssueId.value) {
             targetedIssueId.value = null
@@ -353,24 +282,34 @@ export const useRepoStateStore = defineStore('repoState', () => {
         await saveRepoState()
     }
 
-    const fetchIssues = async () => {
-        console.log("Fetching issues...")
-
-        try {
-            const fetchedIssues = await window.api.fetchIssues(repoInfo.owner, repoInfo.name)
-            issues.value = fetchedIssues
-
-            issues.value.forEach(issue => issue["is_targeted"] = false)
-
-            const serializableIssues = JSON.parse(JSON.stringify(issues.value)) 
-
-            await window.api.saveIssuesCache(repoPath.value, serializableIssues)
-
-            console.log(`Successfully fetched and cached ${fetchedIssues.length} issues`)
-        } catch(error) {
-            console.warn("Error fetching issues:", error.message)
-        }
+const fetchIssues = async () => {
+    console.log("Fetching issues...")
+    
+    // Sicherheitsprüfung
+    if (!repoInfo.value?.ownerName || !repoInfo.value?.repoName) {
+        console.warn("Cannot fetch issues: GitHub repository info missing")
+        console.log("Current repoInfo:", repoInfo.value)
+        return
     }
+
+    try {
+        const fetchedIssues = await window.api.fetchIssues(
+            repoInfo.value.ownerName, 
+            repoInfo.value.repoName
+        )
+        issues.value = fetchedIssues
+
+        issues.value.forEach(issue => issue["is_targeted"] = false)
+
+        const serializableIssues = JSON.parse(JSON.stringify(issues.value)) 
+
+        await window.api.saveIssuesCache(repoPath.value, serializableIssues)
+
+        console.log(`Successfully fetched and cached ${fetchedIssues.length} issues`)
+    } catch(error) {
+        console.warn("Error fetching issues:", error.message)
+    }
+}
 
     const setDirectoryState = async (dirPath, isOpen) => {
         fileExplorerState.value[dirPath] = isOpen
@@ -387,6 +326,19 @@ export const useRepoStateStore = defineStore('repoState', () => {
     const clearHistory = async () => {
         chatbotHistory.value = []
         await saveRepoState({ chatbotHistory: chatbotHistory.value })
+    }
+
+    // ---------------------------------------------------------
+    // For programmatic navigation
+    // ---------------------------------------------------------
+    const focusedNodeSignal = ref(null)
+
+    const focusNode = (nodeId) => {
+        console.log("Fokussiere Node:", nodeId)
+        focusedNodeSignal.value = { 
+            id: nodeId, 
+            time: Date.now() 
+        }
     }
 
     return {
@@ -424,5 +376,8 @@ export const useRepoStateStore = defineStore('repoState', () => {
 
         graphNodes,
         graphEdges,
+
+        focusedNodeSignal,
+        focusNode
     }
 })
