@@ -157,9 +157,39 @@
 
     const currentMessage = ref("")
     const isProcessing = ref(false)
-    const modelName = "codellama"
+    const modelName = "llama3.1"
     const textInput = ref(null)
     const textInputCopy = ref(null)
+
+    const highlightLastMentionedFileNodes = () => {
+        const history = repoStore.currentChatbotHistory
+        if (history.length === 0) return
+
+        const lastMessage = history[history.length - 1]
+
+        if (lastMessage.sender !== 'assistant') return
+
+        const regex = /`([^`]+)`/g
+        const mentionedTokens = [...lastMessage.text.matchAll(regex)].map(m => m[1].trim())
+
+        repoStore.graphNodes.forEach(node => {
+            if (!node.data || node.type !== 'file') return
+
+            const isMentioned = mentionedTokens.some(token => {
+                if (node.id === token) return true
+
+                if (node.id.endsWith('/' + token)) return true
+
+                if (node.label === token) return true
+
+                return false
+            })
+
+            if (node.data.isHighlighted !== isMentioned) {
+                node.data = { ...node.data, isHighlighted: isMentioned }
+            }
+        })
+    }
 
     onMounted(() => {
         window.api.onChatbotResponseChunk((contentChunk) => {
@@ -185,58 +215,40 @@
                 }
             }
         })
+
+
+        highlightLastMentionedFileNodes()
     })
 
     const isKnownFile = (text) => {
         if (!text) return false
-        
-        // Bereinigen (manchmal machen LLMs Leerzeichen rein)
+
         const cleanPath = text.trim()
-        
-        // Wir suchen im Store nach einer Node mit dieser ID
-        // (Da deine IDs relative Pfade sind, z.B. "math/add.js", sollte das matchen)
+
         return repoStore.graphNodes.some(n => n.id === cleanPath && n.type === 'file')
     }
-const buildProjectContext = () => {
-    const nodes = repoStore.graphNodes.filter(n => n.type === "file")
 
-    let contextString = "Here is the source code of the project files:\n\n"
-
-    nodes.forEach(node => {
-        // HIER IST DIE ÄNDERUNG: Wir holen den echten Code, nicht die Summary
-        let content = ""
-        if (node.data.chunks && node.data.chunks.length > 0) {
-            content = node.data.chunks.join("\n")
-        } else {
-            content = "// No code content available"
-        }
-        
-        // Wir begrenzen die Länge pro Datei sicherheitshalber etwas (optional)
-        // content = content.slice(0, 2000) 
-
-        contextString += `FilePath: \`${node.id}\`\nCode Content:\n\`\`\`javascript\n${content}\n\`\`\`\n\n`
-    })
-
-    contextString += "\nIMPORTANT: When you mention a file, simply wrap the full relative path in backticks."
-
-    return contextString
-}
-    /*const buildProjectContext = () => {
-        // Retrieve all file nodes from the store
+    const buildProjectContext = () => {
         const nodes = repoStore.graphNodes.filter(n => n.type === "file")
 
-        let contextString = "Here is an overview of the project architecture based on the analyzed files:\n\nj"
+        let contextString = "Here is the source code of the project files:\n\n"
 
         nodes.forEach(node => {
-            const summary = node.data.summary || "No summary available"
+            let content = ""
 
-            contextString += `File: \`${node.id}\`\nSummary: ${summary}\n\n`
+            if (node.data.chunks && node.data.chunks.length > 0) {
+                content = node.data.chunks.join("\n")
+            } else {
+                content = "// No code content available"
+            }
+
+            contextString += `FilePath: \`${node.id}\`\nCode Content:\n\`\`\`javascript\n${content}\n\`\`\`\n\n`
         })
 
-        contextString += "\nIMPORTANT: When you mention a file, simply wrap the full relative path in backticks (e.g. `src/utils/math.js`)."
+        contextString += "\nIMPORTANT: When you mention a file, simply wrap the full relative path in backticks."
 
         return contextString
-    }*/
+    }
 
     const sendMessage = async (event) => {
         if (event.shiftKey) {
@@ -248,27 +260,18 @@ const buildProjectContext = () => {
 
         const userPrompt = currentMessage.value.trim()
 
-        // UI Update (User Message anzeigen)
         repoStore.currentChatbotHistory.push({ sender: "user", text: userPrompt })
         currentMessage.value = ""
         isProcessing.value = true
 
-        // ---------------------------------------------------------
-        // CONTEXT BUILDING (NEU)
-        // ---------------------------------------------------------
-
-        // 1. Issue Context (Existierend)
         const currentTargetIssue = repoStore.currentTargetIssue
         let issueContext = ""
         if (currentTargetIssue && currentTargetIssue.body) {
             issueContext = `\n\nCURRENT GITHUB ISSUE CONTEXT:\nTitle: ${currentTargetIssue.title}\nBody: ${currentTargetIssue.body}`
         }
 
-        // 2. Project Architecture Context (NEU)
-        // Wir holen die Summaries aller Files
         const projectContext = buildProjectContext()
 
-        // 3. System Prompt zusammenbauen
 const systemPrompt = `
         ROLE DEFINITION:
         - YOU (The AI) are the "Senior Software Architect" and Mentor.
@@ -284,7 +287,7 @@ const systemPrompt = `
         3. DIDACTIC STRATEGY: Do not fix the code for the user immediately. Instead, guide them.
            - If you see a logical error (e.g., using 'subtract' instead of 'add'), ask: "Look closely at line X in file Y. Is this the correct mathematical operation for a gross price?"
            - If imports are wrong, ask: "Check where we import 'subtract' from. Do we actually need it?"
-        4. When referring to files, ALWAYS wrap the path in backticks (e.g., \`src/main.js\`) so they become clickable.
+        4. When referring to files, ALWAYS use the full relative path if possible and wrap it in backticks (e.g., \`src/utils/math.js\`).
 
         CONTEXT (Source Code):
         ${projectContext}
@@ -293,21 +296,11 @@ const systemPrompt = `
         ${issueContext}
     `.trim()
 
-        // ---------------------------------------------------------
-        // MESSAGE HISTORY BAUEN
-        // ---------------------------------------------------------
-
         const rawChatbotHistory = JSON.parse(JSON.stringify(repoStore.currentChatbotHistory))
 
-        // Wir bauen die History für die API
-        // WICHTIG: Die System-Message kommt GANZ AM ANFANG
         const apiMessages = [
             { role: "system", content: systemPrompt }
         ]
-
-        // Dann die Chat-Historie anhängen (User/Assistant Ping-Pong)
-        // Wir filtern die letzte User-Nachricht raus, weil wir die oben schon gepusht haben? 
-        // Nein, rawChatbotHistory enthält schon den neuen User-Prompt.
 
         rawChatbotHistory.forEach(msg => {
             apiMessages.push({
@@ -316,10 +309,6 @@ const systemPrompt = `
             })
         })
 
-        // ---------------------------------------------------------
-        // SENDEN
-        // ---------------------------------------------------------
-
         const currentChatbotHistory = repoStore.currentChatbotHistory
         const newBotMessageIndex = currentChatbotHistory.length;
         currentChatbotHistory.push({ sender: "assistant", text: "", status: "processing" });
@@ -327,7 +316,7 @@ const systemPrompt = `
         try {
             await window.api.sendChatbotMessage(
                 modelName,
-                apiMessages // Hier senden wir jetzt den fetten Kontext mit!
+                apiMessages
             )
 
             currentChatbotHistory[newBotMessageIndex].status = "success";
@@ -356,87 +345,10 @@ const systemPrompt = `
             textInput.value.style.height = "24px"
 
             repoStore.saveHistory(currentChatbotHistory)
+
+            highlightLastMentionedFileNodes()
         }
     }
-
-    /*const sendMessage = async (event) => {
-        if (event.shiftKey) {
-            event.preventDefault()
-            return
-        }
-
-        if (!currentMessage.value.trim()) return
-
-        const userPrompt = currentMessage.value.trim()
-
-        repoStore.currentChatbotHistory.push({ sender: "user", text: userPrompt })
-        currentMessage.value = ""
-        isProcessing.value = true
-
-        const rawChatbotHistory = JSON.parse(JSON.stringify(repoStore.currentChatbotHistory))
-
-        const currentTargetIssue = repoStore.currentTargetIssue
-
-        let currentTargetIssueBody
-
-        if (currentTargetIssue && currentTargetIssue.body) {
-            currentTargetIssueBody = currentTargetIssue.body
-        } else {
-            currentTargetIssueBody = ""
-        }
-
-        const issueMessage = {
-            role: "system",
-            content: currentTargetIssueBody
-        }
-
-        const chatbotHistoryArray = rawChatbotHistory
-            .map(msg => ({
-                role: msg.sender === "user" ? "user" : "assistant",
-                content: msg.text
-            }))
-
-        chatbotHistoryArray.unshift(issueMessage)
-
-        const currentChatbotHistory = repoStore.currentChatbotHistory
-
-        const newBotMessageIndex = currentChatbotHistory.length;
-        currentChatbotHistory.push({ sender: "assistant", text: "", status: "processing" }); // status: processing
-
-        try {
-            console.log("Chatbot history array: ", chatbotHistoryArray)
-            await window.api.sendChatbotMessage(
-                modelName,
-                chatbotHistoryArray
-            )
-
-            currentChatbotHistory[newBotMessageIndex].status = "success";
-        } catch(err) {
-            if (err.message && err.message.includes("Chatbot generation aborted by user")) {
-                console.log("Aborted successfully caught in sendMessage.")
-
-                if (currentChatbotHistory[newBotMessageIndex].status === "processing") {
-                    currentChatbotHistory[newBotMessageIndex].status = "aborted";
-                }
-
-                return
-            }
-
-            if (currentChatbotHistory[newBotMessageIndex].status === "processing") {
-                currentChatbotHistory[newBotMessageIndex].text += `\n\n[ERROR] ${err.message}`;
-                currentChatbotHistory[newBotMessageIndex].status = "error";
-            } else {
-                repoStore.currentChatbotHistory.push({ sender: "assistant", text: `[ERROR] ${err.message}`, status: "error" });
-            }
-        } finally {
-            isProcessing.value = false
-
-            textInputCopy.value.style.height = "24px"
-            textInput.value.style.height = "24px"
-
-            repoStore.saveHistory(currentChatbotHistory)
-        }
-    }*/
 
     const handleTextInputHeight = () => {
         const MAX_INPUT_HEIGHT = 168
@@ -453,7 +365,6 @@ const systemPrompt = `
         const textNode = document.createTextNode(textInput.value.value)
         textInputCopy.value.appendChild(textNode)
 
-        // Count line breaks and add the height to the input
         const currentText = textInput.value.value
         const lineBreaks = currentText.split(/\r|\r\n|\n/)
         const lineBreaksCount = lineBreaks.length - 1
@@ -469,5 +380,4 @@ const systemPrompt = `
         window.api.abortChatbotResponse()
         isProcessing.value = false
     }
-
 </script>

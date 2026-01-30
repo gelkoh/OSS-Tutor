@@ -46,11 +46,12 @@ const aiSummary = computed(() => {
 const connectedHandleIds = computed(() => {
     const connected = new Set()
     if (!edges.value) return connected
-    
+
     edges.value.forEach(edge => {
         if (edge.sourceHandle) connected.add(edge.sourceHandle)
         if (edge.targetHandle) connected.add(edge.targetHandle)
     })
+
     return connected
 })
 
@@ -61,8 +62,11 @@ const isConnected = (handleId) => {
 
 <template>
     <div
-        class="rounded-md border-px border-slate-400 w-180"
-        :class="{ 'expanded': showCode }"
+        class="rounded-md w-180"
+        :class="[
+            showCode === true ? 'expanded' : 'collapsed',
+            data.isHighlighted ? ['border-5', 'border-yellow-400'] : ['border', 'border-slate-400']
+        ]"
     >
         <div
             class="px-2 py-2 bg-neutral-700 cursor-pointer flex gap-x-2 items-center"
@@ -181,8 +185,4 @@ const isConnected = (handleId) => {
     background: blue;
     transition: all 0.2s;
 }
-
-
-
-
 </style>

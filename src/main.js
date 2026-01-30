@@ -571,6 +571,19 @@ function createWindow() {
         }
     })
 
+    ipcMain.handle("fetch-ollama-models", async () => {
+        try {
+            const response = await fetch("http://localhost:11434/api/tags");
+            const data = await response.json();
+
+            const models = data.models.map((model) => model.name);
+            return models;
+        } catch (error) {
+            console.error("Error fetching Ollama models:", error);
+            return ["llama3.1:latest"];
+        }
+    });
+
     /*ipcMain.handle("process-repo-files", async (event, filePaths) => {
         const analysisResults = []
 
