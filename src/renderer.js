@@ -13,6 +13,6 @@ const app = createApp(App)
 app.use(pinia)
 app.use(hljsVuePlugin)
 
-app.config.globalProperties.$appName = "OSSTutor"
+app.config.globalProperties.$appName = "OSS-Tutor"
 
 app.mount("#app")
