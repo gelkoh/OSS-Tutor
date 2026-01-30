@@ -1,12 +1,12 @@
 <template>
     <div class="p-8 bg-neutral-800 rounded-lg">
-        <div class="text-2xl font-bold">Recently used</div>
+        <div class="text-2xl font-bold">Recently used repositories</div>
 
         <div
             v-if="paths.length === 0"
             class="mt-4"
         >
-            You have no recently used projects
+            You have not opened any repositories yet
         </div>
 
         <ul

@@ -9,7 +9,7 @@
                 class="flex items-center gap-x-2 cursor-pointer mt-5 bg-neutral-700 hover:bg-neutral-600
                        px-4 py-2 rounded-sm"
             >
-                <FolderOpen :size="18" class="text-purple-400 inline-block" /> Open Local Repository
+                <FolderOpen :size="18" class="text-purple-400 inline-block" /> Open A Local Repository
             </button>
 
             <button
