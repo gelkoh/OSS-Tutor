@@ -24,4 +24,5 @@ contextBridge.exposeInMainWorld("api", {
     parseCode: (code) => ipcRenderer.invoke("parse-code", code),
     processRepoFiles: (filePaths) => ipcRenderer.invoke("process-repo-files", filePaths),
     analyzeChunk: (model, messages) => ipcRenderer.invoke("analyze-chunk", { model, messages }),
+    fetchOllamaModels: (model, messages) => ipcRenderer.invoke("fetch-ollama-models", { model, messages })
 })

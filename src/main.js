@@ -328,8 +328,11 @@ function createWindow() {
     })
 
     ipcMain.handle("get-recently-used-repositories", async () => {
+
+        console.log("Trying to get recently used repos")
         try {
             const recentlyUsedRepositoriesPaths = await settings.get("recentlyUsedRepositoriesPaths")
+            console.log("recentlyUsedRepositoriesPaths ", recentlyUsedRepositoriesPaths)
             return recentlyUsedRepositoriesPaths
         } catch(err) {
             console.error("An error occurred getting the recently used repositories", err)
@@ -582,55 +585,41 @@ function createWindow() {
             console.error("Error fetching Ollama models:", error);
             return ["llama3.1:latest"];
         }
-    });
-
-    /*ipcMain.handle("process-repo-files", async (event, filePaths) => {
-        const analysisResults = []
-
-        const promises = filePaths.map(async (filePath) => {
-            try {
-                const language = detectLanguage(filePath)
-
-                const codeContent = await fs.promises.readFile(filePath, "utf-8")
-
-                parser.setLanguage(getGrammar(language))
-
-                const tree = parser.parse(codeContent)
-
-                let chunks = performChunking(tree, codeContent)
-
-                analysisResults.push({ filePath, status: "success", language: language, chunks: chunks })
-            } catch(err) {
-                analysisResults.push({ filePath, status: "error", message: err.message })
-            }
-        })
-
-        await Promise.allSettled(promises)
-
-        return { success: true, analysisResults: analysisResults, processedCount: analysisResults.length }
-    })*/
+    })
 
     ipcMain.handle("process-repo-files", async (event, projectRoot) => {
-        // 1. Alle JS Dateien rekursiv finden (hast du ja schon in buildTree)
-        // Wir nehmen an, du hast eine Liste von filePaths:
-        const filePaths = await getAllJsFiles(projectRoot) // Musst du aus deiner buildTree Logik extrahieren
+        try {
+            console.log(`🔍 Scanning repository: ${projectRoot}`)
+            
+            const filePaths = await getAllCodeFiles(projectRoot)
+            console.log(`📁 Found ${filePaths.length} code files`)
+            
+            const promises = filePaths.map(async (filePath) => {
+                try {
+                    const content = await fs.promises.readFile(filePath, "utf-8")
+                    return analyzeFile(filePath, content)
+                } catch (error) {
+                    console.error(`❌ Failed to analyze ${filePath}:`, error.message)
+                    return null
+                }
+            })
 
-        // 2. Analyse parallel
-        const promises = filePaths.map(async (filePath) => {
-            const content = await fs.promises.readFile(filePath, "utf-8")
-            return analyzeFile(filePath, content)
-        })
+            const analysisResults = (await Promise.all(promises)).filter(r => r !== null)
+            console.log(`✅ Analyzed ${analysisResults.length} files successfully`)
 
-        const analysisResults = await Promise.all(promises)
+            const graphData = buildGraphData(analysisResults, projectRoot)
 
-        // 3. Graph Daten bauen
-        const graphData = buildGraphData(analysisResults, projectRoot)
-
-        // 4. Alles zurückgeben
-        return {
-            success: true,
-            analysisResults, // Für das LLM später
-            graphData // Direkt für Vue Flow
+            return {
+                success: true,
+                analysisResults,
+                graphData
+            }
+        } catch (error) {
+            console.error('❌ Error processing repository:', error)
+            return {
+                success: false,
+                error: error.message
+            }
         }
     })
 }
@@ -653,7 +642,7 @@ app.on("window-all-closed", () => {
  * Rekursive Funktion, die nur nach JS-Dateien sucht.
  * Viel schneller als buildTree, da sie keine UI-Objekte erzeugt.
  */
-const getAllJsFiles = (dirPath, arrayOfFiles = []) => {
+/*const getAllJsFiles = (dirPath, arrayOfFiles = []) => {
     let files
     
     try {
@@ -683,4 +672,38 @@ const getAllJsFiles = (dirPath, arrayOfFiles = []) => {
     }
 
     return arrayOfFiles
+}*/
+
+
+// ============================================
+// 1. UPDATE: getAllJsFiles -> getAllCodeFiles
+// ============================================
+const getAllCodeFiles = async (dir) => {
+    const supportedExtensions = ['.js', '.jsx', '.ts', '.tsx', '.py', '.java', '.go', '.rs', '.cpp', '.c', '.h']
+    const files = []
+    
+    const traverse = async (currentPath) => {
+        const entries = await fs.promises.readdir(currentPath, { withFileTypes: true })
+        
+        for (const entry of entries) {
+            const fullPath = path.join(currentPath, entry.name)
+            
+            // Skip common ignore patterns
+            if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist' || entry.name === 'build') {
+                continue
+            }
+            
+            if (entry.isDirectory()) {
+                await traverse(fullPath)
+            } else if (entry.isFile()) {
+                const ext = path.extname(entry.name)
+                if (supportedExtensions.includes(ext)) {
+                    files.push(fullPath)
+                }
+            }
+        }
+    }
+    
+    await traverse(dir)
+    return files
 }

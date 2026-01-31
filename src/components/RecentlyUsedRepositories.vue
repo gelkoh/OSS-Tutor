@@ -53,6 +53,7 @@
     const getRecentlyUsedRepositories = async () => {
         try {
             const recentlyUsedRepositories = await window.api.getRecentlyUsedRepositories()
+            console.log("recentlyUsedRepositories: ", recentlyUsedRepositories)
             return recentlyUsedRepositories
         } catch(err) {
             console.log(`Error getting recently used repositories ${err}`)

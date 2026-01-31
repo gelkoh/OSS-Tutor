@@ -2,9 +2,9 @@
 import { ref, computed } from "vue"
 import { Handle, Position, useVueFlow } from "@vue-flow/core"
 import { useFileIcons } from "../../composables/useFileIcons.js"
-import { ChevronDown, ChevronRight, BotMessageSquare } from "lucide-vue-next"
+import { ChevronDown, ChevronRight, BotMessageSquare, SquarePen } from "lucide-vue-next"
 
-const props = defineProps(["id", "data", "label"])
+const props = defineProps(["id", "data", "label", "filePath"])
 
 const { edges } = useVueFlow()
 
@@ -30,6 +30,13 @@ const codeContent = computed(() => {
 
     return "// No code content available"
 })
+
+const openFileInEditor = () => {
+    console.log("PROPS.DATA: ", props)
+    window.api.openPath(path)
+    console.log(`Trying to open the file with path: ${path} in the default text editor`)
+    console.log(typeof path)
+}
 
 const LINE_HEIGHT = 20
 const PADDING_TOP = 12
@@ -69,13 +76,24 @@ const isConnected = (handleId) => {
         ]"
     >
         <div
-            class="px-2 py-2 bg-neutral-700 cursor-pointer flex gap-x-2 items-center"
+            class="px-2 py-2 bg-neutral-700 cursor-pointer flex gap-x-2 items-center justify-between"
             @click="toggleCode"
         >
-            <template v-if="showCode"><ChevronDown :size="18" /></template>
-            <template v-else><ChevronRight :size="18" /></template>
-            <span class="file-icon"><i :class="[iconClassName]" /></span>
-            <span class="file-name">{{ label }}</span>
+            <div class="flex items-center">
+                <template v-if="showCode"><ChevronDown :size="18" /></template>
+                <template v-else><ChevronRight :size="18" /></template>
+                <span class="file-icon ml-2 mt-1"><i :class="[iconClassName]" /></span>
+                <span class="file-name ml-2">{{ label }}</span>
+            </div>
+
+            <div
+                class="w-[24px] h-[24px] flex items-center justify-center hover:bg-neutral-500 rounded-sm"
+                @click="openFileInEditor()"
+            >
+                <SquarePen
+                    :size="16"
+                />
+            </div>
         </div>
 
         <div v-if="showCode" class="file-body nodrag">
