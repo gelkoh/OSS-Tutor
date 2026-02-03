@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from "vue"
+import { ref, computed, onMounted } from "vue"
 import { Handle, Position, useVueFlow } from "@vue-flow/core"
 import { useFileIcons } from "../../composables/useFileIcons.js"
 import { ChevronDown, ChevronRight, BotMessageSquare, SquarePen } from "lucide-vue-next"
@@ -24,30 +24,40 @@ const toggleCode = () => {
 }
 
 const codeContent = computed(() => {
-    if (props.data.chunks && props.data.chunks.length > 0) {
-        return props.data.chunks.join("")
+    if (props.data.fullContent) {
+        return props.data.fullContent;
     }
 
-    return "// No code content available"
-})
+    if (props.data.chunks && props.data.chunks.length > 0) {
+        return props.data.chunks.join("\n");
+    }
+
+    return "// No code content available";
+});
+
+const displayLineCount = computed(() => {
+    if (props.data.fullContent) {
+        return props.data.fullContent.split('\n').length;
+    }
+
+    return props.data.lineCount || 0;
+});
 
 const openFileInEditor = () => {
-    console.log("PROPS.DATA: ", props)
-    window.api.openPath(path)
-    console.log(`Trying to open the file with path: ${path} in the default text editor`)
-    console.log(typeof path)
+    const filePathToOpen = props.data.filePath || props.id
+    window.api.openPath(filePathToOpen)
 }
 
-const LINE_HEIGHT = 20
+const LINE_HEIGHT = 24
 const PADDING_TOP = 12
-const EXTRA_OFFSET = 3
+const EXTRA_OFFSET = 10
 
 const aiSummary = computed(() => {
     if (props.data.summary) {
         return props.data.summary
     }
 
-    return null
+    return "Click to expand and view code"
 })
 
 const connectedHandleIds = computed(() => {
@@ -69,14 +79,14 @@ const isConnected = (handleId) => {
 
 <template>
     <div
-        class="rounded-md w-180"
+        class="file-node-container rounded-md w-240"
         :class="[
             showCode === true ? 'expanded' : 'collapsed',
             data.isHighlighted ? ['border-5', 'border-yellow-400'] : ['border', 'border-slate-400']
         ]"
     >
         <div
-            class="px-2 py-2 bg-neutral-700 cursor-pointer flex gap-x-2 items-center justify-between"
+            class="file-header px-2 py-2 bg-neutral-700 cursor-pointer flex gap-x-2 items-center justify-between"
             @click="toggleCode"
         >
             <div class="flex items-center">
@@ -88,11 +98,9 @@ const isConnected = (handleId) => {
 
             <div
                 class="w-[24px] h-[24px] flex items-center justify-center hover:bg-neutral-500 rounded-sm"
-                @click="openFileInEditor()"
+                @click.stop="openFileInEditor()"
             >
-                <SquarePen
-                    :size="16"
-                />
+                <SquarePen :size="16" />
             </div>
         </div>
 
@@ -102,15 +110,15 @@ const isConnected = (handleId) => {
                 {{ aiSummary }}
             </p>
 
-            <div class="relative ">
-                <ul class="w-10 py-[1em] absolute top-px left-0 pl-2 pr-2 text-right text-neutral-200 bg-neutral-900">
+            <div class="relative">
+                <ul class="line-numbers w-10 py-[1em] absolute top-px left-0 pl-2 pr-2 text-right text-neutral-200 bg-neutral-900">
                     <li v-for="i in props.data.lineCount - 1" :key="i">{{ i }}</li>
                 </ul>
 
                 <highlightjs
                     language="javascript"
                     :code="codeContent"
-                    class="bg-neutral-900"
+                    class="bg-neutral-900 code-display"
                 />
 
                 <div class="handle-overlay">
@@ -118,7 +126,7 @@ const isConnected = (handleId) => {
                         <div
                             v-if="isConnected(func.name + '-in')"
                             class="function-handle-wrapper"
-                            :style="{ top: (func.line * LINE_HEIGHT) + PADDING_TOP + EXTRA_OFFSET + 'px' }"
+                            :style="{ top: ((func.line) * LINE_HEIGHT) + PADDING_TOP + (LINE_HEIGHT / 2) + 'px' }"
                         >
                             <Handle
                                 type="target"
@@ -146,61 +154,91 @@ const isConnected = (handleId) => {
                 </div>
             </div>
         </div>
+
+        <!-- Collapsed View -->
+        <div v-else class="file-summary p-2 bg-neutral-800 text-neutral-300">
+            <span class="font-semibold">AI summary: </span>
+            {{ aiSummary }}
+        </div>
     </div>
 </template>
 
 <style scoped>
+.file-node-container {
+    background: #1e293b;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+.file-node-container.collapsed {
+    min-height: 120px;
+}
+
+.file-node-container.expanded {
+    min-height: 200px;
+}
+
+.file-header {
+    border-bottom: 1px solid #475569;
+}
+
 .file-icon {
+    font-size: 18px;
+}
+
+
+.file-summary {
+    line-height: 1.5;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.code-display, .line-numbers {
+    font-family: 'Fira Code', 'JetBrains Mono', monospace;
     font-size: 14px;
+    line-height: 24px !important;
 }
 
-.file-name {
-    font-family: "monospace";
+.line-numbers {
+    padding-top: 12px;
+    padding-bottom: 12px;
 }
 
-.chevron {
-    font-size: 10px;
-    color: #94a3b8;
+:deep(pre code.hljs) {
+    white-space: pre !important;
+    padding-top: 12px !important; 
+    padding-bottom: 12px !important;
+    padding-left: 50px !important;
+    line-height: 24px !important;
 }
 
-.file-body {
-    position: relative;
-    font-family: monospace;
-    font-size: 14px;
-    line-height: 20px;
-    /*overflow: hidden;*/
+.code-handle {
+    transform: translateY(-50%);
+    margin-top: 0;
 }
 
-.file-body pre {
-    margin: 0;
-}
-
-.file-body code {
-    padding: 12px !important;
-}
 .handle-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
     pointer-events: none;
+}
+
+.code-handle {
+    pointer-events: all;
 }
 
 .function-handle-wrapper {
     position: absolute;
     left: 0;
-    width: 100%;
-    height: 20px;
+    right: 0;
 }
 
-.code-handle {
-    pointer-events: auto;
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    border: 2px solid lightblue;
-    background: blue;
-    transition: all 0.2s;
+.handle-input {
+    background: #34d399;
+}
+
+.handle-output {
+    background: #60a5fa;
+}
+
+pre code.hljs {
+    padding-left: 0.2em !important;
 }
 </style>

@@ -6,11 +6,11 @@ import Cpp from "tree-sitter-cpp"
 import path from "path"
 
 const parser = new Parser()
-const MAX_CHUNK_SIZE = 1000
+const MAX_CHUNK_SIZE = 2000
 
 const LANGUAGE_CONFIG = {
-    'js': {
-        name: 'javascript',
+    "js": {
+        name: "javascript",
         parser: JavaScript,
         queries: {
             functions: `
@@ -32,11 +32,17 @@ const LANGUAGE_CONFIG = {
                 (call_expression
                     function: (identifier) @func_name
                 ) @call
+
+                (call_expression
+                    function: (member_expression
+                        property: (property_identifier) @func_name
+                    )
+                ) @call
             `
         }
     },
-    'jsx': {
-        name: 'javascript',
+    "jsx": {
+        name: "javascript",
         parser: JavaScript,
         queries: {
             functions: `
@@ -68,10 +74,10 @@ const detectLanguage = (filePath) => {
     return LANGUAGE_CONFIG[ext] || null
 }
 
-export const chunkCode = (codeContent, language = 'javascript') => {
+export const chunkCode = (codeContent, language = "javascript") => {
     if (!codeContent || codeContent.trim().length === 0) return []
 
-    const langConfig = LANGUAGE_CONFIG[language] || LANGUAGE_CONFIG['js']
+    const langConfig = LANGUAGE_CONFIG[language] || LANGUAGE_CONFIG["js"]
     parser.setLanguage(langConfig.parser)
 
     const tree = parser.parse(codeContent)
@@ -118,7 +124,7 @@ export const chunkCode = (codeContent, language = 'javascript') => {
 }
 
 const sanitizeCode = (text) => {
-    return text.replace(/[\t ]+/g, " ").trim()
+    return text.trim()
 }
 
 export const analyzeFile = (filePath, codeContent) => {
@@ -126,16 +132,17 @@ export const analyzeFile = (filePath, codeContent) => {
 
     if (!langConfig) {
         const ext = path.extname(filePath).slice(1)
-        console.warn(`⚠️ Unsupported file type: .${ext} (${path.basename(filePath)})`)
+        console.warn(`Unsupported file type: .${ext} (${path.basename(filePath)})`)
 
         return {
             filePath,
-            language: ext || 'unknown',
+            language: ext || "unknown",
             chunks: [codeContent],
             dependencies: [],
-            lineCount: codeContent.split('\n').length,
+            lineCount: codeContent.split("\n").length,
             functions: [],
-            calls: []
+            calls: [],
+            fullContent: codeContent,
         }
     }
 
@@ -143,7 +150,7 @@ export const analyzeFile = (filePath, codeContent) => {
     const tree = parser.parse(codeContent)
 
     const chunks = chunkCode(codeContent, langConfig.name)
-    const lineCount = codeContent.split('\n').length
+    const lineCount = codeContent.split("\n").length
 
     const dependencies = []
 
@@ -152,7 +159,7 @@ export const analyzeFile = (filePath, codeContent) => {
         const captures = importQuery.captures(tree.rootNode)
 
         for (const capture of captures) {
-            if (capture.name === 'import_path') {
+            if (capture.name === "import_path") {
                 const rawImportPath = capture.node.text.slice(1, -1) // Remove quotes
                 const directoryOfCurrentFile = path.dirname(filePath)
                 const absoluteTarget = path.resolve(directoryOfCurrentFile, rawImportPath)
@@ -164,7 +171,7 @@ export const analyzeFile = (filePath, codeContent) => {
             }
         }
     } catch (error) {
-        console.warn(`⚠️ Failed to parse imports for ${path.basename(filePath)}:`, error.message)
+        console.warn(`Failed to parse imports for ${path.basename(filePath)}:`, error.message)
     }
 
     const functions = []
@@ -174,7 +181,7 @@ export const analyzeFile = (filePath, codeContent) => {
         const functionCaptures = functionQuery.captures(tree.rootNode)
 
         functionCaptures.forEach(capture => {
-            if (capture.name === 'name') {
+            if (capture.name === "name") {
                 functions.push({
                     name: capture.node.text,
                     line: capture.node.startPosition.row
@@ -182,7 +189,7 @@ export const analyzeFile = (filePath, codeContent) => {
             }
         })
     } catch (error) {
-        console.warn(`⚠️ Failed to parse functions for ${path.basename(filePath)}:`, error.message)
+        console.warn(`Failed to parse functions for ${path.basename(filePath)}:`, error.message)
     }
 
     const calls = []
@@ -192,7 +199,7 @@ export const analyzeFile = (filePath, codeContent) => {
         const callCaptures = callQuery.captures(tree.rootNode)
 
         callCaptures.forEach(capture => {
-            if (capture.name === 'func_name') {
+            if (capture.name === "func_name") {
                 calls.push({
                     name: capture.node.text,
                     line: capture.node.startPosition.row
@@ -200,7 +207,7 @@ export const analyzeFile = (filePath, codeContent) => {
             }
         })
     } catch (error) {
-        console.warn(`⚠️ Failed to parse calls for ${path.basename(filePath)}:`, error.message)
+        console.warn(`Failed to parse calls for ${path.basename(filePath)}:`, error.message)
     }
 
     return {
@@ -210,6 +217,7 @@ export const analyzeFile = (filePath, codeContent) => {
         dependencies,
         lineCount,
         functions,
-        calls
+        calls,
+        fullContent: codeContent
     }
 }

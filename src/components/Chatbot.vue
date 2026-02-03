@@ -222,10 +222,15 @@
 
     const isKnownFile = (text) => {
         if (!text) return false
+        const cleanPath = text.trim().replace(/\\/g, '/')
 
-        const cleanPath = text.trim()
+        return repoStore.graphNodes.some(n => {
+            if (n.type !== 'file') return false
+            if (n.id === cleanPath) return true
+            if (n.id.replace(/\\/g, '/').endsWith(cleanPath)) return true
 
-        return repoStore.graphNodes.some(n => n.id === cleanPath && n.type === 'file')
+            return false
+        })
     }
 
     const buildProjectContext = () => {
@@ -265,79 +270,80 @@
         isProcessing.value = true
 
         const currentTargetIssue = repoStore.currentTargetIssue
-        let issueContext = ""
-        if (currentTargetIssue && currentTargetIssue.body) {
-            issueContext = `\n\nCURRENT GITHUB ISSUE CONTEXT:\nTitle: ${currentTargetIssue.title}\nBody: ${currentTargetIssue.body}`
-        }
-
-        const projectContext = buildProjectContext()
-
-const systemPrompt = `
-        ROLE DEFINITION:
-        - YOU (The AI) are the "Senior Software Architect" and Mentor.
-        - THE USER (The Human) is a "Junior Developer".
-        - NEVER confuse these roles. Do not address the user as the architect.
-
-        GOAL:
-        Help the Junior Developer (User) find and fix bugs in the provided codebase context.
-
-        INSTRUCTIONS:
-        1. ANALYZE the provided "Code Content" sections thoroughly.
-        2. Be confident. Do not say "I am not sure" if the code is visible in the context. You see the code, so you know how functions are used.
-        3. DIDACTIC STRATEGY: Do not fix the code for the user immediately. Instead, guide them.
-           - If you see a logical error (e.g., using 'subtract' instead of 'add'), ask: "Look closely at line X in file Y. Is this the correct mathematical operation for a gross price?"
-           - If imports are wrong, ask: "Check where we import 'subtract' from. Do we actually need it?"
-        4. When referring to files, ALWAYS use the full relative path if possible and wrap it in backticks (e.g., \`src/utils/math.js\`).
-
-        CONTEXT (Source Code):
-        ${projectContext}
-
-        CURRENT ISSUE:
-        ${issueContext}
-    `.trim()
-
-        const rawChatbotHistory = JSON.parse(JSON.stringify(repoStore.currentChatbotHistory))
-
-        const apiMessages = [
-            { role: "system", content: systemPrompt }
-        ]
-
-        rawChatbotHistory.forEach(msg => {
-            apiMessages.push({
-                role: msg.sender === "user" ? "user" : "assistant",
-                content: msg.text
-            })
-        })
+        
+        const graphData = JSON.parse(JSON.stringify({
+            nodes: repoStore.graphNodes,
+            edges: repoStore.graphEdges
+        }))
 
         const currentChatbotHistory = repoStore.currentChatbotHistory
-        const newBotMessageIndex = currentChatbotHistory.length;
-        currentChatbotHistory.push({ sender: "assistant", text: "", status: "processing" });
+        const newBotMessageIndex = currentChatbotHistory.length
+        currentChatbotHistory.push({ sender: "assistant", text: "", status: "processing" })
 
         try {
-            await window.api.sendChatbotMessage(
-                modelName,
-                apiMessages
-            )
+            // RAG => retrieve only relevant chunks
+            const ragResult = await window.api.sendChatbotMessageRAG({
+                model: modelName,
+                userQuery: userPrompt,
+                graphData,
+                targetIssue: JSON.parse(JSON.stringify(currentTargetIssue)),
+                projectRoot: repoStore.repoPath
+            })
 
-            currentChatbotHistory[newBotMessageIndex].status = "success";
+            if (!ragResult.success) {
+                throw new Error(ragResult.error)
+            }
+
+            // Build chat history
+            const rawChatbotHistory = JSON.parse(JSON.stringify(repoStore.currentChatbotHistory))
+
+            const apiMessages = [
+                { role: "system", content: ragResult.systemPrompt || "You are a helpful assistant." }
+            ]
+
+            console.log("RAG Context:", ragResult.systemPrompt);
+
+            // Only add last 5 messages for context window management
+            const recentHistory = rawChatbotHistory.slice(-6, -1)
+
+            recentHistory.forEach(msg => {
+                if (msg.text) {
+                    apiMessages.push({
+                        role: msg.sender === "user" ? "user" : "assistant",
+                        content: msg.text
+                    })
+                }
+            })
+
+            apiMessages.push({ role: "user", content: userPrompt });
+
+            await window.api.sendChatbotMessage({
+                model: modelName,
+                messages: apiMessages
+            })
+
+            currentChatbotHistory[newBotMessageIndex].status = "success"
         } catch(err) {
             if (err.message && err.message.includes("Chatbot generation aborted by user")) {
                 console.log("Aborted successfully caught in sendMessage.")
 
                 if (currentChatbotHistory[newBotMessageIndex].status === "processing") {
-                    currentChatbotHistory[newBotMessageIndex].status = "aborted";
+                    currentChatbotHistory[newBotMessageIndex].status = "aborted"
                 }
 
                 return
             }
 
             if (currentChatbotHistory[newBotMessageIndex].status === "processing") {
-                currentChatbotHistory[newBotMessageIndex].text += `\n\n[ERROR] ${err.message}`;
-                currentChatbotHistory[newBotMessageIndex].status = "error";
+                currentChatbotHistory[newBotMessageIndex].text += `\n\n[ERROR] ${err.message}`
+                currentChatbotHistory[newBotMessageIndex].status = "error"
             } else {
-                repoStore.currentChatbotHistory.push({ sender: "assistant", text: `[ERROR] ${err.message}`, status: "error" });
+                repoStore.currentChatbotHistory.push({ 
+                    sender: "assistant",
+                    text: `[ERROR] ${err.message}`,
+                    status: "error"
+                })
             }
-
         } finally {
             isProcessing.value = false
 

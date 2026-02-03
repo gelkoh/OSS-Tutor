@@ -9,50 +9,50 @@ const props = defineProps(['id', 'data', 'label'])
             <span class="folder-icon">
                 <Folder :size="18" />
             </span>
-
             <span class="folder-name">{{ label }}</span>
         </div>
 
-        <!-- Dieser Bereich wächst automatisch mit den Children -->
+        <!-- This grows with children -->
         <div class="directory-content"></div>
     </div>
 </template>
 
 <style scoped>
 .directory-node {
-    background: rgba(30, 41, 59, 0.4);
-    border: 2px dashed #475569;
-    border-radius: 8px;
-    box-sizing: border-box;
-    position: relative;
-    /* Minimale Größe damit der Node sichtbar ist */
-    padding-bottom: 20px;
-
-    /* TEST */
+    background: transparent;
+    border: 2px solid #475569;
+    box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.2);
+    border-radius: 12px;
     width: 100%;
     height: 100%;
+    position: relative;
+    pointer-events: none;
 }
 
 .directory-header {
-    padding: 8px 12px;
-    /*background: rgba(51, 65, 85, 0.8);*/
-    border-top-left-radius: 6px;
-    border-top-right-radius: 6px;
-    color: #e2e8f0;
-    font-family: monospace;
-    justify-content: center;
-    font-size: 13px;
+    background: #1e293b;
+    pointer-events: all; 
+    height: 50px;
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-bottom: 10px;
+    padding: 0 16px;
+    border-bottom: 2px solid #475569;
+    border-radius: 10px 10px 0 0;
 }
 
 .folder-icon {
-    font-size: 16px;
+    color: #60a5fa;
 }
 
 .folder-name {
-    font-weight: 500;
+    color: #e2e8f0;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.directory-content {
+    min-height: 200px;
+    padding: 20px;
 }
 </style>

@@ -4,9 +4,6 @@ import { ref, computed, toRaw } from 'vue'
 const ANALYZE_PROJECT = false
 
 export const useRepoStateStore = defineStore('repoState', () => {
-    // ---------------------------------------------------------
-    // STATE
-    // ---------------------------------------------------------
     const graphNodes = ref([])
     const graphEdges = ref([])
 
@@ -38,9 +35,7 @@ export const useRepoStateStore = defineStore('repoState', () => {
     // Chatbot
     const chatbotHistory = ref([])
 
-    ////////////////////
     // Computed properties
-    ////////////////////
     const currentFileTree = computed(() => fileTree.value)
     const currentSearchQuery = computed(() => searchQuery.value)
     const currentChatbotHistory = computed(() => chatbotHistory.value)
@@ -57,13 +52,11 @@ export const useRepoStateStore = defineStore('repoState', () => {
         return `${currentFileIndex.value}/${totalFilesToBeAnalysedCount.value}`
     })
 
-    const getChunksAnalysedDisplay = computed(() => {
+    /*const getChunksAnalysedDisplay = computed(() => {
         return `${currentChunkIndex.value}/${totalChunkCount.value}`
-    })
+    })*/
 
-    ////////////////////
     // Reading/loading/saving repo
-    ////////////////////
     const readRepoContents = async (path) => {
         isLoading.value = true
         isRepoOpen.value = true
@@ -75,10 +68,21 @@ export const useRepoStateStore = defineStore('repoState', () => {
             let cachedState = await window.api.loadRepoState(path)
 
             if (cachedState && cachedState.graphData && cachedState.graphData.nodes.length > 0) {
-                console.log("Loading from Cache...")
+                console.log("Loading from Cache...");
 
+                // Set local state
                 graphNodes.value = cachedState.graphData.nodes
                 graphEdges.value = cachedState.graphData.edges
+
+                // Prepare data for ipc-call by removing proxies
+                const rawAnalysisResults = JSON.parse(JSON.stringify(
+                    graphNodes.value.map(node => node.data)
+                ))
+
+                // Rebuild v ector store in the background
+                window.api.rebuildVectorStore(rawAnalysisResults).catch(err => {
+                    console.error("Failed to rebuild Vector Store in background:", err)
+                })
 
                 if (cachedState.fileTree) {
                     fileTree.value = cachedState.fileTree
@@ -96,9 +100,9 @@ export const useRepoStateStore = defineStore('repoState', () => {
                 const cachedIssues = await window.api.loadIssuesCache(path)
                 issues.value = cachedIssues || []
 
-                if (issues.value.length === 0) {
+                /*if (issues.value.length === 0) {
                     fetchIssues()
-                }
+                }*/
             } else {
                 console.log("No valid cache found. Starting full analysis...")
                 await performFullAnalysis(path)
@@ -107,15 +111,11 @@ export const useRepoStateStore = defineStore('repoState', () => {
             console.error("Critical Error during repo loading:", e)
             isRepoOpen.value = false
         } finally {
-            //await new Promise(resolve => setTimeout(resolve, 20000))
-
             isLoading.value = false
         }
     }
 
-    // ---------------------------------------------------------
     // ANALYSIS LOGIC
-    // ---------------------------------------------------------
     const performFullAnalysis = async (path) => {
         // Retrieve file tree for file explorer
         const { fileTree: tree, repoInfo: info } = await window.api.readDirectoryContents(path)
@@ -141,11 +141,11 @@ export const useRepoStateStore = defineStore('repoState', () => {
             currentFileName.value = node.label
 
             try {
-                const codeContext = node.data.chunks.join("\n\n").substring(0, 10000) // Safety Trim
+                const codeContext = node.data.chunks.join("\n").substring(0, 10000);
 
                 const messages = [
                     {
-                        role: "system", 
+                        role: "system",
                         content: "You are a senior software architect. Summarize the technical purpose of this code file in 2-3 concise sentences. Do not mention imports unless crucial. Focus on what functionality it exports." 
                     },
                     {
@@ -180,36 +180,36 @@ export const useRepoStateStore = defineStore('repoState', () => {
         const parentNodes = nodes.filter(n => !n.parentNode)
         const childNodes = nodes.filter(n => n.parentNode)
 
-        console.log('Organisiere:', parentNodes.length, 'Parents,', childNodes.length, 'Children')
+        console.log("Organise:", parentNodes.length, "Parents,", childNodes.length, "Children")
 
         const organizedParents = parentNodes.map((parent, index) => ({
             ...parent,
-            type: parent.type || 'directory',
+            type: parent.type || "directory",
             position: { x: index * 600, y: 0 },
             style: {
-                padding: '0',
+                padding: "0",
             },
             extent: undefined,
             data: {
                 ...parent.data,
-                label: parent.label || parent.data?.label || 'Unknown Directory'
+                label: parent.label || parent.data?.label || "Unknown Directory"
             }
         }))
 
         const organizedChildren = childNodes.map((child, index) => ({
             ...child,
-            type: child.type || 'file',
+            type: child.type || "file",
             position: { x: 20, y: 60 + (index * 50) },
             parentNode: child.parentNode,
-            extent: 'parent',
+            extent: "parent",
             expandParent: true,
             data: {
                 ...child.data,
-                label: child.label || child.data?.label || 'Unknown File'
+                label: child.label || child.data?.label || "Unknown File"
             }
         }))
 
-        console.log('Organisierte Parents:', organizedParents.map(p => ({
+        console.log("Organised parents:", organizedParents.map(p => ({
             id: p.id,
             position: p.position,
             type: p.type
@@ -257,17 +257,6 @@ export const useRepoStateStore = defineStore('repoState', () => {
         const finalData = JSON.parse(JSON.stringify(stateToSave))
 
         await window.api.saveRepoState(repoPath.value, finalData)
-
-        /*const stateWithProxies = {
-            targetedIssueId: targetedIssueId.value,
-            fileExplorerState: fileExplorerState.value,
-            chatbotHistory: chatbotHistory.value,
-            ...updates
-        }
-
-        const finalData = JSON.parse(JSON.stringify(stateWithProxies))
-
-        await window.api.saveRepoState(repoPath.value, finalData)*/
     }
 
     const setFileTree = (treeData) => {
@@ -338,16 +327,14 @@ export const useRepoStateStore = defineStore('repoState', () => {
         await saveRepoState({ chatbotHistory: chatbotHistory.value })
     }
 
-    // ---------------------------------------------------------
     // For programmatic navigation
-    // ---------------------------------------------------------
     const focusedNodeSignal = ref(null)
 
     const focusNode = (nodeId) => {
-        console.log("Fokussiere Node:", nodeId)
-        focusedNodeSignal.value = { 
-            id: nodeId, 
-            time: Date.now() 
+        console.log("Focus node:", nodeId)
+        focusedNodeSignal.value = {
+            id: nodeId,
+            time: Date.now()
         }
     }
 
@@ -359,7 +346,7 @@ export const useRepoStateStore = defineStore('repoState', () => {
         getCurrentProgress,
         getCurrentFileName,
         getFilesAnalysedDisplay,
-        getChunksAnalysedDisplay,
+        //getChunksAnalysedDisplay,
 
         currentFileTree,
         fileExplorerState,

@@ -28,10 +28,10 @@
                     <div class="w-60">{{ repoStore.getFilesAnalysedDisplay }}</div>
                 </div>
 
-                <div class="flex">
+                <!--<div class="flex">
                     <div class="w-60 font-bold">Chunks analysed:</div>
                     <div class="w-60">{{ repoStore.getChunksAnalysedDisplay }}</div>
-                </div>
+                </div>-->
             </div>
         </div>
     </div>

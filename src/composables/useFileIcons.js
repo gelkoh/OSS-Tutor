@@ -1,5 +1,4 @@
 const iconMap = new Map([
-    // TODO: Complete the list
     ["ts", "typescript"],
     ["js", "javascript"],
     ["html", "html5"],

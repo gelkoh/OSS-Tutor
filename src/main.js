@@ -10,7 +10,13 @@ import { Ollama } from "ollama"
 import Parser from "tree-sitter"
 import JavaScript from "tree-sitter-javascript"
 import { chunkCode, analyzeFile } from "./services/AnalysisService.js"
-import { buildGraphData } from "./services/GraphBuilder.js"
+import { buildGraphData } from "./services/GraphBuilderService.js"
+import { getAllCodeFiles } from "./utils/FileSystem.js"
+import {
+    buildVectorStore,
+    hybridRetrieval,
+    buildContextFromChunks
+} from './services/RAGService.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -73,7 +79,7 @@ const performChunking = (tree, codeContent) => {
         }
 
         const chunkString = currentChunk.join("\n")
-        const sanitizedChunkString = chunkString.replace(/[\t ]+/g, " ")
+        const sanitizedChunkString = chunkString;
 
         chunks.push(sanitizedChunkString)
 
@@ -103,7 +109,7 @@ const performChunking = (tree, codeContent) => {
 
         if (currentTokenCount + nextBlockTokens > MAX_CHUNK_SIZE && currentChunk.length > 0) {
             const chunkString = currentChunk.join("\n")
-            const sanitizedChunkString = chunkString.replace(/[\t ]+/g, " ")
+            const sanitizedChunkString = chunkString
             chunks.push(sanitizedChunkString)
 
             currentChunk = []
@@ -143,30 +149,27 @@ function buildTree(dirPath, currentDepth, allFilePathsCollector, projectRoot = n
     const filtered = dirEntries.filter(entry => {
         if (entry.name === "node_modules") return false
 
-        // ZUERST prüfen, ob es ein .git-Verzeichnis ist
+        // Check if it is a git repo
         if (entry.isDirectory() && entry.name === ".git") {
             const gitDirPath = path.join(dirPath, entry.name)
-            
-            // Nur das .git-Verzeichnis im Wurzelverzeichnis auswerten
+
             if (dirPath === root) {
                 try {
                     const configPath = path.join(gitDirPath, "config")
-                    
+
                     if (fs.existsSync(configPath)) {
                         const fileContents = fs.readFileSync(configPath, "utf-8")
                         const lines = fileContents.split("\n")
-                        
+
                         for (const line of lines) {
-                            // Beide URL-Formate unterstützen
                             if (line.includes("github.com")) {
                                 let url = line.trim()
-                                
-                                // URL aus der config extrahieren
+
+                                // Extract url from config
                                 if (url.includes("url = ")) {
                                     url = url.split("url = ")[1].trim()
                                 }
-                                
-                                // SSH-Format: git@github.com:gelkoh/mini-test-project.git
+
                                 if (url.startsWith("git@github.com:")) {
                                     const parts = url.split(":")[1].split("/")
                                     if (parts.length >= 2) {
@@ -174,7 +177,6 @@ function buildTree(dirPath, currentDepth, allFilePathsCollector, projectRoot = n
                                         currentRepoInfo.repoName = parts[1].replace(/\.git$/, "")
                                     }
                                 }
-                                // HTTPS-Format: https://github.com/gelkoh/mini-test-project.git
                                 else if (url.includes("https://github.com/")) {
                                     const parts = url.split("https://github.com/")[1].split("/")
                                     if (parts.length >= 2) {
@@ -182,7 +184,7 @@ function buildTree(dirPath, currentDepth, allFilePathsCollector, projectRoot = n
                                         currentRepoInfo.repoName = parts[1].replace(/\.git$/, "")
                                     }
                                 }
-                                
+
                                 console.log("Found GitHub repo:", currentRepoInfo.ownerName, currentRepoInfo.repoName)
                                 break
                             }
@@ -192,8 +194,8 @@ function buildTree(dirPath, currentDepth, allFilePathsCollector, projectRoot = n
                     console.error("Error reading .git/config:", err)
                 }
             }
-            
-            return false // .git-Verzeichnis immer ausschließen
+
+            return false
         }
 
         return true
@@ -218,7 +220,7 @@ function buildTree(dirPath, currentDepth, allFilePathsCollector, projectRoot = n
             node.children = buildTree(fullPath, entryDepth, allFilePathsCollector, root) || []
         } else {
             if (shouldAnalyzeFile(entry.name)) {
-                allFilePathsCollector.push(fullPath)
+                allFilePathsCollector.push(relativePath)
             }
         }
 
@@ -269,7 +271,7 @@ function createWindow() {
 
     win.webContents.on("new-window", function(e, url) {
         e.preventDefault();
-        require('electron').shell.openExternal(url);
+        require("electron").shell.openExternal(url);
     })
 
     ipcMain.on("open-directory-dialog", async(event) => {
@@ -330,6 +332,7 @@ function createWindow() {
     ipcMain.handle("get-recently-used-repositories", async () => {
 
         console.log("Trying to get recently used repos")
+
         try {
             const recentlyUsedRepositoriesPaths = await settings.get("recentlyUsedRepositoriesPaths")
             console.log("recentlyUsedRepositoriesPaths ", recentlyUsedRepositoriesPaths)
@@ -345,17 +348,17 @@ function createWindow() {
             let recentlyUsedRepositoriesPaths = await settings.get("recentlyUsedRepositoriesPaths")
 
             recentlyUsedRepositoriesPaths = recentlyUsedRepositoriesPaths.filter(path => {
-                if (path === repoPath) {
-                    return false
-                }
-
-                return true
+                return path !== repoPath
             })
 
             await settings.set("recentlyUsedRepositoriesPaths", recentlyUsedRepositoriesPaths)
+
             await settings.unset(`issues-cache.${repoPath}`)
+            await settings.unset(`repo-state.${repoPath}`)  // 👈 ADD THIS LINE
+
+            console.log(`Fully removed repository cache for: ${repoPath}`)
         } catch(err) {
-            console.error(`An error occurred removing the repository under: ${repoPath} from the recently used repositories`)
+            console.error(`An error occurred removing the repository under: ${repoPath} from the recently used repositories`, err)
         }
     })
 
@@ -465,6 +468,15 @@ function createWindow() {
         })
     })
 
+    ipcMain.handle("load-repo-state", async (event, repoPath) => {
+        const state = await settings.get(`repo-state.${repoPath}`)
+        return state || {}
+    })
+
+    ipcMain.handle("save-repo-state", async (event, repoPath, state) => {
+        await settings.set(`repo-state.${repoPath}`, state)
+    })
+
     ipcMain.handle("open-target-directory-dialog", async (event) => {
         const senderWindow = BrowserWindow.fromWebContents(event.sender)
 
@@ -479,44 +491,99 @@ function createWindow() {
         }
     })
 
-    ipcMain.handle("send-chatbot-message", async (event, { model, chatHistory }) => {
-        const messages = chatHistory.map(msg => {
-            let contentString = ''
+    ipcMain.handle("send-chatbot-message-rag", async (event, { userQuery, graphData, targetIssue, projectRoot }) => {
+        try {
+            console.log(`RAG Query: "${userQuery.substring(0, 50)}..."`)
 
-            if (typeof msg.content === 'string') {
-                contentString = msg.content
-            }
-            else if (typeof msg.content === 'object' && msg.content !== null && typeof msg.content.text === 'string') {
-                contentString = msg.content.text
-            }
-            else if (Array.isArray(msg.content)) {
-                contentString = msg.content.map(c => typeof c === 'string' ? c : (c.text || '')).join('\n')
-            }
+            // Retrieval
+            const retrievedContext = await hybridRetrieval(userQuery, graphData, targetIssue, 8);
+            console.log(`Found ${retrievedContext.length} relevant files for RAG`)
+
+            // Build context str
+            const contextString = buildContextFromChunks(retrievedContext, targetIssue, projectRoot)
+
+            console.log(`Context size: ${contextString.length} chars from ${retrievedContext.length} files`)
+
+            // System prompt
+const systemPrompt = `
+ROLE: You are a Senior Software Architect helping a Junior Developer.
+
+TASK: Answer the developer's question using ONLY the provided CODE CONTEXT and GITHUB ISSUE below.
+
+STRICT INSTRUCTIONS ON FILE REFERENCES:
+1. When mentioning files, use ONLY the relative path from the project root (e.g., \`utils/math.js\` NOT \`/home/user/project/utils/math.js\`)
+2. Extract the relative path from the context headers which show "📁 File: \`/full/path/file.js\`"
+3. You MUST wrap these paths in backticks: \`relative/path/file.js\`
+4. NEVER use absolute system paths - they are not helpful to users
+5. The relative path is everything after the last occurrence of the project name in the full path
+
+EXAMPLES:
+- Full path: /home/neptune/git/github/mini-test-project/utils/math.js
+  → Reference as: \`utils/math.js\`
+- Full path: /home/neptune/git/github/mini-test-project/features/invoice.js
+  → Reference as: \`features/invoice.js\`
+
+DIALECTIC STYLE:
+- Explain WHY the bug happens (e.g., "In \`features/invoice.js\`, you are using \`subtract\` instead of \`add\`")
+- NEVER PASTE FIXED CODE. Guide the developer to the solution.
+- Use code blocks for snippets
+
+${contextString}
+`.trim();
 
             return {
-                role: msg.role,
-                content: String(msg.content) || ''
+                systemPrompt,
+                success: true,
+                retrievedFiles: retrievedContext.map(([filePath]) => filePath)
             }
-        })
+        } catch (error) {
+            console.error("RAG Query Error:", error)
+            return {
+                success: false,
+                error: error.message
+            }
+        }
+    })
 
+    let abortController = null
+
+    ipcMain.handle("send-chatbot-message", async (event, { model, messages }) => {
         try {
-            console.log(`Sending prompt to Ollama model ${model}...`);
+            if (!messages || !Array.isArray(messages)) {
+                throw new Error(`Messages ist kein Array! Typ: ${typeof messages}`);
+            }
 
-            const responseStream = await ollama.chat({
+            abortController = new AbortController()
+
+            const stream = await ollama.chat({
                 model: model,
                 messages: messages,
-                stream: true
+                stream: true,
+                options: {
+                    temperature: 0.7,
+                }
             })
 
-            for await (const chunk of responseStream) {
-                if (chunk.message && chunk.message.content) {
-                    event.sender.send("chatbot-response-chunk", chunk.message.content)
+            for await (const chunk of stream) {
+                if (abortController.signal.aborted) {
+                    console.log("Stream aborted by user")
+                    throw new Error("Chatbot generation aborted by user")
+                }
+
+                const content = chunk.message?.content || ""
+
+                if (content) {
+                    event.sender.send("chatbot-response-chunk", content)
                 }
             }
 
-            return { success: true, message: "Stream finished." }
-        } catch(err) {
-            console.error("Error communicating with Ollama: ", err)
+            abortController = null
+        } catch (err) {
+            if (err.message && err.message.includes("aborted")) {
+                throw err
+            }
+
+            console.error("Error communicating with Ollama:", err)
 
             if (err.message && err.message.includes("connect ECONNREFUSED")) {
                 throw new Error("Ollama server not reachable. Please start Ollama.")
@@ -524,11 +591,6 @@ function createWindow() {
 
             if (err.message && err.message.includes("pull") || err.message.includes("not found")) {
                 throw new Error(`Model: '${model}' not found. Please run 'ollama pull ${model}'.`)
-            }
-
-            if (err.name === "AbortError") {
-                event.sender.send('chatbot-response-aborted')
-                throw new Error("Chatbot generation aborted by user.")
             }
 
             throw new Error(`Chatbot error: ${err.message}`)
@@ -539,15 +601,6 @@ function createWindow() {
         ollama.abort()
         event.sender.send("chatbot-response-aborted")
         console.log("Chatbot response aborted")
-    })
-
-    ipcMain.handle("loadRepoState", async (event, repoPath) => {
-        const state = await settings.get(`repo-state.${repoPath}`)
-        return state || {}
-    })
-
-    ipcMain.handle("saveRepoState", async (event, repoPath, state) => {
-        await settings.set(`repo-state.${repoPath}`, state)
     })
 
     ipcMain.handle("analyze-chunk", async (event, { model, messages }) => {
@@ -589,25 +642,35 @@ function createWindow() {
 
     ipcMain.handle("process-repo-files", async (event, projectRoot) => {
         try {
-            console.log(`🔍 Scanning repository: ${projectRoot}`)
-            
+            console.log(`Scanning repository: ${projectRoot}`)
+
+            // File all code-files
             const filePaths = await getAllCodeFiles(projectRoot)
-            console.log(`📁 Found ${filePaths.length} code files`)
+            console.log(`Found ${filePaths.length} code files`)
             
+            // Parallel analysis
             const promises = filePaths.map(async (filePath) => {
                 try {
                     const content = await fs.promises.readFile(filePath, "utf-8")
                     return analyzeFile(filePath, content)
                 } catch (error) {
-                    console.error(`❌ Failed to analyze ${filePath}:`, error.message)
+                    console.error(`Failed to analyze ${filePath}:`, error.message)
                     return null
                 }
             })
 
             const analysisResults = (await Promise.all(promises)).filter(r => r !== null)
-            console.log(`✅ Analyzed ${analysisResults.length} files successfully`)
+            console.log(`Analyzed ${analysisResults.length} files successfully`)
 
-            const graphData = buildGraphData(analysisResults, projectRoot)
+            // Build graph with correct edges
+            const graphData = buildGraphData(
+                analysisResults,
+                projectRoot,
+                filePaths
+            )
+
+            // Build vector store for RAG
+            await buildVectorStore(analysisResults)
 
             return {
                 success: true,
@@ -615,12 +678,17 @@ function createWindow() {
                 graphData
             }
         } catch (error) {
-            console.error('❌ Error processing repository:', error)
+            console.error("Error processing repository:", error)
+
             return {
                 success: false,
                 error: error.message
             }
         }
+    })
+
+    ipcMain.handle("rebuild-vector-store", async (event, payload) => {
+        await buildVectorStore(payload)
     })
 }
 
@@ -635,75 +703,3 @@ app.whenReady().then(() => {
 app.on("window-all-closed", () => {
     if (process.platform !== "darwin") app.quit()
 })
-
-
-// PUT THIS IN SERVICE MAYBE
-/**
- * Rekursive Funktion, die nur nach JS-Dateien sucht.
- * Viel schneller als buildTree, da sie keine UI-Objekte erzeugt.
- */
-/*const getAllJsFiles = (dirPath, arrayOfFiles = []) => {
-    let files
-    
-    try {
-        files = fs.readdirSync(dirPath, { withFileTypes: true })
-    } catch(err) {
-        console.error("Access denied or error reading:", dirPath)
-        return arrayOfFiles
-    }
-
-    for (const file of files) {
-        // Ignoriere Ordner, die wir nicht scannen wollen
-        if (file.name === "node_modules" || file.name === ".git" || file.name === "dist" || file.name === "build") {
-            continue
-        }
-
-        const fullPath = path.join(dirPath, file.name)
-
-        if (file.isDirectory()) {
-            // Rekursiver Abstieg in Unterordner
-            getAllJsFiles(fullPath, arrayOfFiles)
-        } else {
-            // Hier dein Filter: Ist es eine JS Datei?
-            if (file.name.endsWith(".js") || file.name.endsWith(".jsx") || file.name.endsWith(".vue")) {
-                arrayOfFiles.push(fullPath)
-            }
-        }
-    }
-
-    return arrayOfFiles
-}*/
-
-
-// ============================================
-// 1. UPDATE: getAllJsFiles -> getAllCodeFiles
-// ============================================
-const getAllCodeFiles = async (dir) => {
-    const supportedExtensions = ['.js', '.jsx', '.ts', '.tsx', '.py', '.java', '.go', '.rs', '.cpp', '.c', '.h']
-    const files = []
-    
-    const traverse = async (currentPath) => {
-        const entries = await fs.promises.readdir(currentPath, { withFileTypes: true })
-        
-        for (const entry of entries) {
-            const fullPath = path.join(currentPath, entry.name)
-            
-            // Skip common ignore patterns
-            if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist' || entry.name === 'build') {
-                continue
-            }
-            
-            if (entry.isDirectory()) {
-                await traverse(fullPath)
-            } else if (entry.isFile()) {
-                const ext = path.extname(entry.name)
-                if (supportedExtensions.includes(ext)) {
-                    files.push(fullPath)
-                }
-            }
-        }
-    }
-    
-    await traverse(dir)
-    return files
-}

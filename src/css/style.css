@@ -68,9 +68,6 @@ code.hljs {
     background: transparent !important;
 }
 
-
-
-
 .vue-flow__controls {
     top: 0 !important;
     right: 0 !important;
@@ -104,15 +101,10 @@ code.hljs {
     background: var(--color-neutral-700);
 }
 
-
-
-
-/* HIGHLIGHTJS */
-code.hljs {
-    /*padding: 12px !important;*/
-    /*font-size: 14px;*/
-    /*line-height: 20px !important;*/
-    padding-left: calc(var(--spacing) * 12) !important;
+.vue-flow__edges {
+    z-index: 1000 !important;
 }
 
-
+.vue-flow__node-directory {
+    background: rgba(30, 41, 59, 0.2);
+}
